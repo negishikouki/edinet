@@ -16,3 +16,5 @@
 /S100XDNG.json
 /__pycache__
 summary/summary.csv
+summary.py
+summary/edinet_summary.csv
