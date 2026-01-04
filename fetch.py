@@ -12,8 +12,11 @@ from tqdm import tqdm
 class EdinetDocType(IntEnum):
     CSV = 5
 
+
 API_KEY = "b053b9de6579485d94409e03743f16c4"
 BASE_URL = "https://api.edinet-fsa.go.jp/api/v2/documents"
+LISTUP_PATH = Path("listup.csv")
+UPDATED_LISTUP_PATH = Path("updated_listup.csv")
 
 doc_prefix_by_frequency = {
     "annual": {"prefix": ["jpcrp030000"], "role": "通期（12か月）"},
@@ -86,7 +89,7 @@ def docid_already_fetched(out_root: Path, docID: str) -> bool:
 # main
 # -----------------------------
 def main():
-    listup_path = Path("listup.csv")
+    listup_path = UPDATED_LISTUP_PATH if UPDATED_LISTUP_PATH.exists() else LISTUP_PATH
     out_root = Path("./doc")
     out_root.mkdir(parents=True, exist_ok=True)
 
@@ -110,7 +113,6 @@ def main():
 
         except Exception as e:
             tqdm.write(f"[WARN] {docID}: {e}")
-
 
 
 if __name__ == "__main__":
