@@ -7,7 +7,7 @@ SUMMARY_DIR = Path("summary")
 SUMMARY_DIR.mkdir(exist_ok=True)
 LISTUP_PATH = Path("listup.csv")
 UPDATED_LISTUP_PATH = Path("updated_listup.csv")
-SUMMARY_PATH = SUMMARY_DIR / "summary.csv"
+SUMMARY_PATH = SUMMARY_DIR / "edinet_summary.csv"
 TARGET_COLS = ["EPS", "CFPS", "BPS"]
 
 
