@@ -78,11 +78,21 @@ def fetch_all_prefix_dfs(docID: str, prefixes: list[str]) -> dict[str, pd.DataFr
     return dfs
 
 
-def docid_already_fetched(out_root: Path, docID: str) -> bool:
+def build_fetched_docid_set(out_root: Path) -> set[str]:
     """
-    doc/配下のどこかに {docID}.csv が存在すれば True
+    doc/配下に存在する CSV ファイルの docID をまとめて取得する
     """
-    return any(out_root.glob(f"*/{docID}.csv"))
+    if not out_root.exists():
+        return set()
+
+    return {csv_path.stem for csv_path in out_root.glob("*/*.csv")}
+
+
+def docid_already_fetched(docID: str, fetched_docids: set[str]) -> bool:
+    """
+    事前に収集した CSV ファイル一覧から docID の有無を判定する
+    """
+    return docID in fetched_docids
 
 
 # -----------------------------
@@ -92,6 +102,7 @@ def main():
     listup_path = UPDATED_LISTUP_PATH if UPDATED_LISTUP_PATH.exists() else LISTUP_PATH
     out_root = Path("./doc")
     out_root.mkdir(parents=True, exist_ok=True)
+    fetched_docids = build_fetched_docid_set(out_root)
 
     listup_df = pd.read_csv(listup_path)
     docIDs = listup_df["docID"].dropna().astype(str).tolist()
@@ -99,7 +110,7 @@ def main():
     for docID in tqdm(docIDs, desc="Fetching per docID"):
 
         # 既存チェック
-        if docid_already_fetched(out_root, docID):
+        if docid_already_fetched(docID, fetched_docids):
             tqdm.write(f"[SKIP] {docID}: already exists")
             continue
 
@@ -110,6 +121,7 @@ def main():
                 out_dir = out_root / prefix
                 out_dir.mkdir(parents=True, exist_ok=True)
                 df.to_csv(out_dir / f"{docID}.csv", index=False)
+                fetched_docids.add(docID)
 
         except Exception as e:
             tqdm.write(f"[WARN] {docID}: {e}")
