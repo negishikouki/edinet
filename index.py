@@ -11,6 +11,7 @@ from tqdm import tqdm
 # 設定
 # =========================
 LISTUP_CSV = Path("./listup.csv")
+UPDATED_LISTUP_CSV = Path("./updated_listup.csv")
 DOC_ROOT = Path("./doc")      # docID.csv を再帰探索するルート
 OUT_ROOT = Path("./index")    # secCode別の出力先
 
@@ -357,7 +358,8 @@ def calc_eps_bps_cfps(doc_df: pd.DataFrame) -> Tuple[Optional[float], Optional[f
 # =========================
 def main() -> None:
     # listup.csv 読み込み
-    listup = pd.read_csv(LISTUP_CSV, low_memory=False)
+    listup_path = UPDATED_LISTUP_CSV if UPDATED_LISTUP_CSV.exists() else LISTUP_CSV
+    listup = pd.read_csv(listup_path, low_memory=False)
 
     required_cols = {"secCode", "date", "docID"}
     missing = required_cols - set(listup.columns)
