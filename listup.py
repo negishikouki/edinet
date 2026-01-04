@@ -38,7 +38,7 @@ UPDATED_LISTUP_PATH = Path("updated_listup.csv")
 
 def get_existing_listup() -> pd.DataFrame:
     if LISTUP_PATH.exists():
-        return pd.read_csv(LISTUP_PATH)
+        return pd.read_csv(LISTUP_PATH, low_memory=False)
     return pd.DataFrame(columns=LISTUP_COLUMNS)
 
 
@@ -99,7 +99,7 @@ def fetch_listup(start_date: date, end_date: date, existing_doc_ids: set[str]) -
     return pd.DataFrame(listup, columns=LISTUP_COLUMNS)
 
 
-def main():
+def main() -> bool:
     existing_df = get_existing_listup()
     start_date = determine_start_date(existing_df)
     end_date = date.today()
@@ -112,11 +112,13 @@ def main():
         print("No new records found.")
         if UPDATED_LISTUP_PATH.exists():
             UPDATED_LISTUP_PATH.unlink()
-        return
+        return False
 
     new_df.to_csv(UPDATED_LISTUP_PATH, index=False)
     print(f"Saved {len(new_df)} new records to {UPDATED_LISTUP_PATH}.")
+    return True
 
 
 if __name__ == "__main__":
-    main()
+    is_updated = main()
+    print(f"updated={is_updated}")
