@@ -5,10 +5,11 @@ from summary import main as summary_main
 
 
 def main():
-    listup_main()
-    fetch_main()
-    index_main()
-    summary_main()
+    is_updated = listup_main()
+    if is_updated:
+        fetch_main()
+        index_main()
+        summary_main()
 
 
 if __name__ == "__main__":
