@@ -35,6 +35,10 @@ EID_NCPBUIOA = "jpcrp_cor:NetCashProvidedByUsedInOperatingActivitiesSummaryOfBus
 EID_ICF = "jppfs_cor:NetCashProvidedByUsedInInvestingActivities"           # 投資CF
 EID_NCPBUIIA = "jpcrp_cor:NetCashProvidedByUsedInInvestingActivitiesSummaryOfBusinessResults" # 投資活動によるキャッシュ・フロー、経営指標等
 
+# 財務CF（FCFE向け）
+EID_NET_INCREASE_DECREASE_ST_LOANS = "jppfs_cor:NetIncreaseDecreaseInShortTermLoansPayableFinCF"  # 短期借入金の純増減額
+EID_PROCEEDS_LT_LOANS = "jppfs_cor:ProceedsFromLongTermLoansPayableFinCF"  # 長期借入れによる収入
+EID_REPAYMENT_LT_LOANS = "jppfs_cor:RepaymentOfLongTermLoansPayableFinCF"  # 長期借入金の返済による支出
 # Issued Shares
 EID_TNOIS = "jpcrp_cor:TotalNumberOfIssuedSharesSummaryOfBusinessResults"  # 発行済株式総数（普通株式）、経営指標等
 
@@ -119,6 +123,17 @@ def _to_float(x) -> Optional[float]:
         return float(x)
     except Exception:
         return None
+
+
+def _sum_optional(values: Iterable[Optional[float]]) -> Optional[float]:
+    found = False
+    total = 0.0
+    for value in values:
+        if value is None:
+            continue
+        found = True
+        total += value
+    return total if found else None
 
 
 def pick_value(
@@ -301,7 +316,7 @@ def calc_eps_bps_cfps(doc_df: pd.DataFrame) -> Tuple[Optional[float], Optional[f
         bps = (net_assets / issued_shares) if (net_assets is not None and issued_shares not in (None, 0.0)) else None
 
     # -----------------------------
-    # CFPS
+    # CFPS（FCFEベース）
     # -----------------------------
     ocf = pick_value(
         doc_df,
@@ -347,8 +362,38 @@ def calc_eps_bps_cfps(doc_df: pd.DataFrame) -> Tuple[Optional[float], Optional[f
             prefer_current_year=True,
         )
 
-    fcf = (ocf + icf) if ((ocf is not None) and (icf is not None)) else None
-    cfps = (fcf / issued_shares) if (fcf is not None and issued_shares not in (None, 0.0)) else None
+    fin_cf = _sum_optional(
+        [
+            pick_value(
+                doc_df,
+                EID_NET_INCREASE_DECREASE_ST_LOANS,
+                context_id=None,
+                prefer_consolidated=True,
+                prefer_current_year=True,
+            ),
+            pick_value(
+                doc_df,
+                EID_PROCEEDS_LT_LOANS,
+                context_id=None,
+                prefer_consolidated=True,
+                prefer_current_year=True,
+            ),
+            pick_value(
+                doc_df,
+                EID_REPAYMENT_LT_LOANS,
+                context_id=None,
+                prefer_consolidated=True,
+                prefer_current_year=True,
+            ),
+        ]
+    )
+
+    fcfe = (
+        ocf + icf + fin_cf
+        if (ocf is not None and icf is not None and fin_cf is not None)
+        else None
+    )
+    cfps = (fcfe / issued_shares) if (fcfe is not None and issued_shares not in (None, 0.0)) else None
 
     return eps, cfps, bps
 
