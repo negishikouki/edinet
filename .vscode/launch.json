@@ -17,6 +17,13 @@
             "request": "launch",
             "program": "main.py",
             "console": "integratedTerminal"
+        },
+        {
+            "name": "recalc",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "recalc.py",
+            "console": "integratedTerminal"
         }
     ]
 }
