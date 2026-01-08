@@ -39,6 +39,11 @@ EID_NCPBUIIA = "jpcrp_cor:NetCashProvidedByUsedInInvestingActivitiesSummaryOfBus
 EID_NET_INCREASE_DECREASE_ST_LOANS = "jppfs_cor:NetIncreaseDecreaseInShortTermLoansPayableFinCF"  # 短期借入金の純増減額
 EID_PROCEEDS_LT_LOANS = "jppfs_cor:ProceedsFromLongTermLoansPayableFinCF"  # 長期借入れによる収入
 EID_REPAYMENT_LT_LOANS = "jppfs_cor:RepaymentOfLongTermLoansPayableFinCF"  # 長期借入金の返済による支出
+
+# 投資（CAPEX）
+EID_PPE_PURCHASE = "jppfs_cor:PurchaseOfPropertyPlantAndEquipmentInvCF"  # 有形固定資産の取得
+EID_INTANGIBLE_PURCHASE = "jppfs_cor:PurchaseOfIntangibleAssetsInvCF"    # 無形固定資産の取得
+
 # Issued Shares
 EID_TNOIS = "jpcrp_cor:TotalNumberOfIssuedSharesSummaryOfBusinessResults"  # 発行済株式総数（普通株式）、経営指標等
 
@@ -315,18 +320,19 @@ def calc_eps_bps_cfps(doc_df: pd.DataFrame) -> Tuple[Optional[float], Optional[f
         )
         bps = (net_assets / issued_shares) if (net_assets is not None and issued_shares not in (None, 0.0)) else None
 
+    
     # -----------------------------
-    # CFPS（FCFEベース）
+    # CFPS（FCFEベース：厳密版）
     # -----------------------------
+    # 営業CF
     ocf = pick_value(
         doc_df,
         EID_NCPBUIOA,
-            context_id=[
-                CID_CurrentYTDDuration,
-                CID_CurrentYearDuration,
-                CID_CurrentYearDuration_NonConsolidated,
-                CID_CurrentYearInstant_NonConsolidated,
-            ],
+        context_id=[
+            CID_CurrentYTDDuration,
+            CID_CurrentYearDuration,
+            CID_CurrentYearDuration_NonConsolidated,
+        ],
         prefer_consolidated=True,
         prefer_current_year=True,
     )
@@ -339,63 +345,72 @@ def calc_eps_bps_cfps(doc_df: pd.DataFrame) -> Tuple[Optional[float], Optional[f
             prefer_consolidated=True,
             prefer_current_year=True,
         )
-        
-    icf = pick_value(
+
+    # CAPEX（有形＋無形）
+    capex = _sum_optional([
+        pick_value(
+            doc_df,
+            EID_PPE_PURCHASE,
+            context_id=None,
+            prefer_consolidated=True,
+            prefer_current_year=True,
+        ),
+        pick_value(
+            doc_df,
+            EID_INTANGIBLE_PURCHASE,
+            context_id=None,
+            prefer_consolidated=True,
+            prefer_current_year=True,
+        ),
+    ])
+
+    # 純借入額
+    st_delta = pick_value(
         doc_df,
-        EID_NCPBUIIA,
-            context_id=[
-                CID_CurrentYTDDuration,
-                CID_CurrentYearDuration,
-                CID_CurrentYearDuration_NonConsolidated,
-                CID_CurrentYearInstant_NonConsolidated,
-            ],
+        EID_NET_INCREASE_DECREASE_ST_LOANS,
+        context_id=None,
         prefer_consolidated=True,
         prefer_current_year=True,
     )
 
-    if icf is None:
-        icf = pick_value(
-            doc_df,
-            EID_ICF,
-            context_id=None,
-            prefer_consolidated=True,
-            prefer_current_year=True,
+    lt_proceeds = pick_value(
+        doc_df,
+        EID_PROCEEDS_LT_LOANS,
+        context_id=None,
+        prefer_consolidated=True,
+        prefer_current_year=True,
+    )
+
+    lt_repayment = pick_value(
+        doc_df,
+        EID_REPAYMENT_LT_LOANS,
+        context_id=None,
+        prefer_consolidated=True,
+        prefer_current_year=True,
+    )
+
+    # 長期借入返済は必ずマイナスであることを要求
+    if lt_repayment is not None and lt_repayment > 0:
+        raise ValueError(
+            f"Invalid sign: RepaymentOfLongTermLoansPayableFinCF must be negative, got {lt_repayment}"
         )
 
-    fin_cf = _sum_optional(
-        [
-            pick_value(
-                doc_df,
-                EID_NET_INCREASE_DECREASE_ST_LOANS,
-                context_id=None,
-                prefer_consolidated=True,
-                prefer_current_year=True,
-            ),
-            pick_value(
-                doc_df,
-                EID_PROCEEDS_LT_LOANS,
-                context_id=None,
-                prefer_consolidated=True,
-                prefer_current_year=True,
-            ),
-            pick_value(
-                doc_df,
-                EID_REPAYMENT_LT_LOANS,
-                context_id=None,
-                prefer_consolidated=True,
-                prefer_current_year=True,
-            ),
-        ]
-    )
+    net_borrowing = _sum_optional([
+        st_delta,
+        lt_proceeds,
+        lt_repayment,  # 既にマイナスで入っている前提
+    ])
 
     fcfe = (
-        ocf + icf + fin_cf
-        if (ocf is not None and icf is not None and fin_cf is not None)
+        ocf - capex + net_borrowing
+        if (ocf is not None and capex is not None and net_borrowing is not None)
         else None
     )
+
     cfps = (fcfe / issued_shares) if (fcfe is not None and issued_shares not in (None, 0.0)) else None
 
     return eps, cfps, bps
+
 
 
 # =========================
