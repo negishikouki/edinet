@@ -409,6 +409,31 @@ def calc_eps_bps_cfps(doc_df: pd.DataFrame) -> Tuple[Optional[float], Optional[f
 
     cfps = (fcfe / issued_shares) if (fcfe is not None and issued_shares not in (None, 0.0)) else None
 
+    if cfps is None:
+        icf = pick_value(
+            doc_df,
+            EID_NCPBUIIA,
+            context_id=[
+                CID_CurrentYTDDuration,
+                CID_CurrentYearDuration,
+                CID_CurrentYearDuration_NonConsolidated,
+            ],
+            prefer_consolidated=True,
+            prefer_current_year=True,
+        )
+
+        if icf is None:
+            icf = pick_value(
+                doc_df,
+                EID_ICF,
+                context_id=None,
+                prefer_consolidated=True,
+                prefer_current_year=True,
+            )
+
+        fcff = _sum_optional([ocf, icf])
+        cfps = (fcff / issued_shares) if (fcff is not None and issued_shares not in (None, 0.0)) else None
+
     return eps, cfps, bps
 
 
