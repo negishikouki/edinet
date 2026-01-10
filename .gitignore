@@ -18,3 +18,4 @@
 summary/summary.csv
 summary.py
 summary/edinet_summary.csv
+*.csv
