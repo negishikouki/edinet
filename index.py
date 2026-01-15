@@ -446,16 +446,24 @@ def main() -> None:
     listup_path = UPDATED_LISTUP_CSV if UPDATED_LISTUP_CSV.exists() else LISTUP_CSV
     listup = pd.read_csv(listup_path, low_memory=False)
 
-    required_cols = {"secCode", "date", "docID"}
+    required_cols = {"secCode", "date", "docID", "edinetCode"}
     missing = required_cols - set(listup.columns)
     if missing:
         raise ValueError(f"listup.csv に必要な列がありません: {sorted(missing)}")
 
+    listup = listup.copy()
+    listup["date_dt"] = pd.to_datetime(listup["date"], errors="coerce")
+
+    # edinetCodeで最新のsecCodeを取得し、全件に反映
+    non_null_sec = listup[listup["secCode"].notna()].sort_values(
+        ["date_dt", "date"], ascending=[True, True]
+    )
+    latest_sec_code = non_null_sec.groupby("edinetCode", dropna=False)["secCode"].last()
+    listup["secCode"] = listup["edinetCode"].map(latest_sec_code).fillna(listup["secCode"])
+
     # secCodeでGroupBy、dateでOrderBy
     # dateは文字列でも良いが、並びが崩れそうならdatetime化
     # ここでは datetime化してから出力時は YYYY-MM-DD に戻す
-    listup = listup.copy()
-    listup["date_dt"] = pd.to_datetime(listup["date"], errors="coerce")
     # dateが壊れている行は最後に回す
     listup = listup.sort_values(["secCode", "date_dt", "date"], ascending=[True, True, True])
 
