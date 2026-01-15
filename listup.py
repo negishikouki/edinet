@@ -75,7 +75,6 @@ def fetch_listup(start_date: date, end_date: date, existing_doc_ids: set[str]) -
                     doc_id = doc.get("docID")
                     if (
                         doc.get("docTypeCode") in docTypeCode
-                        and doc.get("secCode") is not None
                         and doc_id is not None
                         and doc_id not in existing_doc_ids
                     ):

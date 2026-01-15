@@ -45,12 +45,12 @@ def merge_listups(listup_path: Path, updated_path: Path) -> pd.DataFrame:
     base_columns: list[str] | None = None
 
     if listup_path.exists():
-        base_df = pd.read_csv(listup_path)
+        base_df = pd.read_csv(listup_path, low_memory=False)
         frames.append(base_df)
         base_columns = base_df.columns.tolist()
 
     if updated_path.exists():
-        updated_df = pd.read_csv(updated_path)
+        updated_df = pd.read_csv(updated_path, low_memory=False)
         frames.append(updated_df)
         if base_columns is None:
             base_columns = updated_df.columns.tolist()
