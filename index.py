@@ -454,22 +454,12 @@ def main() -> None:
     listup = listup.copy()
     listup["date_dt"] = pd.to_datetime(listup["date"], errors="coerce")
 
-    # edinetCodeでGroupByし、最新のsecCodeがあれば全件に反映
-    def align_sec_code(group: pd.DataFrame) -> pd.DataFrame:
-        non_null = group[group["secCode"].notna()].sort_values(
-            ["date_dt", "date"], ascending=[True, True]
-        )
-        if non_null.empty:
-            return group
-        latest_sec_code = non_null.iloc[-1]["secCode"]
-        group = group.copy()
-        group["secCode"] = latest_sec_code
-        return group
-
-    listup = (
-        listup.groupby("edinetCode", dropna=False, sort=False, group_keys=False)
-        .apply(align_sec_code)
+    # edinetCodeで最新のsecCodeを取得し、全件に反映
+    non_null_sec = listup[listup["secCode"].notna()].sort_values(
+        ["date_dt", "date"], ascending=[True, True]
     )
+    latest_sec_code = non_null_sec.groupby("edinetCode", dropna=False)["secCode"].last()
+    listup["secCode"] = listup["edinetCode"].map(latest_sec_code).fillna(listup["secCode"])
 
     # secCodeでGroupBy、dateでOrderBy
     # dateは文字列でも良いが、並びが崩れそうならdatetime化
