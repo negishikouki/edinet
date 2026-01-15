@@ -92,6 +92,19 @@ CID_CurrentYearInstant_NonConsolidated = "CurrentYearInstant_NonConsolidatedMemb
 
 
 # =========================
+# 期間種別（docTypeCode）
+# =========================
+DOC_TYPE_PERIOD = {
+    "120": "annual",
+    "130": "annual",
+    "160": "semiannual",
+    "170": "semiannual",
+    "140": "quarterly",
+    "150": "quarterly",
+}
+
+
+# =========================
 # ユーティリティ
 # =========================
 def build_doc_index(doc_root: Path) -> Dict[str, Path]:
@@ -139,6 +152,66 @@ def _sum_optional(values: Iterable[Optional[float]]) -> Optional[float]:
         found = True
         total += value
     return total if found else None
+
+
+def calc_ttm(records: list[dict], key: str) -> list[Optional[float]]:
+    annual: list[dict] = []
+    semiannual: list[dict] = []
+    quarterly: list[dict] = []
+    ttm_values: list[Optional[float]] = []
+
+    for rec in records:
+        period_type = rec["period_type"]
+        value = rec.get(key)
+        if period_type == "annual":
+            annual.append(rec)
+        elif period_type == "semiannual":
+            semiannual.append(rec)
+        elif period_type == "quarterly":
+            quarterly.append(rec)
+
+        ttm: Optional[float] = None
+        if period_type == "annual":
+            ttm = value
+        elif period_type == "semiannual":
+            if len(semiannual) >= 2:
+                values = [semiannual[-1].get(key), semiannual[-2].get(key)]
+                if all(v is not None for v in values):
+                    ttm = values[0] + values[1]
+            if ttm is None and value is not None:
+                latest_annual = annual[-1] if annual else None
+                if latest_annual is not None and latest_annual.get(key) is not None:
+                    ttm = value + latest_annual.get(key) / 2
+                else:
+                    ttm = value * 2
+        elif period_type == "quarterly":
+            if len(quarterly) >= 4:
+                values = [q.get(key) for q in quarterly[-4:]]
+                if all(v is not None for v in values):
+                    ttm = sum(values)
+            if ttm is None and value is not None:
+                latest_annual = annual[-1] if annual else None
+                latest_semiannual = semiannual[-1] if semiannual else None
+                if latest_annual is not None and latest_annual.get(key) is not None:
+                    annual_value = latest_annual.get(key)
+                    annual_date = latest_annual["date_dt"]
+                    if (
+                        latest_semiannual is not None
+                        and latest_semiannual["date_dt"] > annual_date
+                        and latest_semiannual.get(key) is not None
+                    ):
+                        ttm = value + latest_semiannual.get(key) + annual_value / 4
+                    else:
+                        quarters_since = [q for q in quarterly if q["date_dt"] > annual_date]
+                        values = [q.get(key) for q in quarters_since]
+                        if all(v is not None for v in values):
+                            sum_quarters = sum(values)
+                            ttm = sum_quarters + annual_value / 4 * (4 - len(values))
+                else:
+                    ttm = value * 4
+        ttm_values.append(ttm)
+
+    return ttm_values
 
 
 def pick_value(
@@ -446,7 +519,7 @@ def main() -> None:
     listup_path = UPDATED_LISTUP_CSV if UPDATED_LISTUP_CSV.exists() else LISTUP_CSV
     listup = pd.read_csv(listup_path, low_memory=False)
 
-    required_cols = {"secCode", "date", "docID", "edinetCode"}
+    required_cols = {"secCode", "date", "docID", "edinetCode", "docTypeCode"}
     missing = required_cols - set(listup.columns)
     if missing:
         raise ValueError(f"listup.csv に必要な列がありません: {sorted(missing)}")
@@ -479,12 +552,20 @@ def main() -> None:
             total=listup["secCode"].nunique(),
             desc="secCode"
         ):
-        rows = []
+        records = []
 
         for _, r in g.iterrows():
             date_str = str(r["date"])
+            date_dt = r["date_dt"]
+            if pd.isna(date_dt):
+                date_dt = pd.Timestamp.min
             doc_id = str(r["docID"])
+            doc_type_code = str(r["docTypeCode"])
             fname = f"{doc_id}.csv"
+
+            period_type = DOC_TYPE_PERIOD.get(doc_type_code)
+            if period_type is None:
+                continue
 
             doc_path = doc_index.get(fname)
             if doc_path is None:
@@ -499,19 +580,40 @@ def main() -> None:
 
             eps, cfps, bps = calc_eps_bps_cfps(doc_df)
 
-            rows.append(
+            records.append(
                 {
                     "date": date_str,
+                    "date_dt": date_dt,
                     "secCode": sec_code,
                     "EPS": eps,
                     "CFPS": cfps,
                     "BPS": bps,
+                    "docTypeCode": doc_type_code,
+                    "period_type": period_type,
                 }
             )
 
-        if not rows:
+        if not records:
             # 1件も作れない場合は出力しない（必要なら空CSVを出すよう変更可）
             continue
+
+        records.sort(key=lambda item: (item["date_dt"], item["date"]))
+        eps_ttm = calc_ttm(records, "EPS")
+        cfps_ttm = calc_ttm(records, "CFPS")
+
+        rows = []
+        for rec, eps_value, cfps_value in zip(records, eps_ttm, cfps_ttm):
+            rows.append(
+                {
+                    "date": rec["date"],
+                    "secCode": rec["secCode"],
+                    "EPS": eps_value,
+                    "CFPS": cfps_value,
+                    "BPS": rec["BPS"],  # BPSは時点値のためTTM化しない
+                    "docTypeCode": rec["docTypeCode"],
+                    "periodType": rec["period_type"],
+                }
+            )
 
         out_df = pd.DataFrame(rows)
 
