@@ -212,37 +212,11 @@ def calc_ttm(records: list[dict], key: str) -> list[Optional[float]]:
                 values = [semiannual[-1].get(key), semiannual[-2].get(key)]
                 if all(v is not None for v in values):
                     ttm = values[0] + values[1]
-            if ttm is None and value is not None:
-                latest_annual = annual[-1] if annual else None
-                if latest_annual is not None and latest_annual.get(key) is not None:
-                    ttm = value + latest_annual.get(key) / 2
-                else:
-                    ttm = value * 2
         elif period_type == "quarterly":
             if len(quarterly) >= 4:
                 values = [q.get(key) for q in quarterly[-4:]]
                 if all(v is not None for v in values):
                     ttm = sum(values)
-            if ttm is None and value is not None:
-                latest_annual = annual[-1] if annual else None
-                latest_semiannual = semiannual[-1] if semiannual else None
-                if latest_annual is not None and latest_annual.get(key) is not None:
-                    annual_value = latest_annual.get(key)
-                    annual_date = latest_annual["date_dt"]
-                    if (
-                        latest_semiannual is not None
-                        and latest_semiannual["date_dt"] > annual_date
-                        and latest_semiannual.get(key) is not None
-                    ):
-                        ttm = value + latest_semiannual.get(key) + annual_value / 4
-                    else:
-                        quarters_since = [q for q in quarterly if q["date_dt"] > annual_date]
-                        values = [q.get(key) for q in quarters_since]
-                        if all(v is not None for v in values):
-                            sum_quarters = sum(values)
-                            ttm = sum_quarters + annual_value / 4 * (4 - len(values))
-                else:
-                    ttm = value * 4
         ttm_values.append(ttm)
 
     return ttm_values
@@ -251,7 +225,8 @@ def calc_ttm(records: list[dict], key: str) -> list[Optional[float]]:
 def pick_value(
     df: pd.DataFrame,
     element_id: str,
-    context_id: str | list = None,
+    context_id: str | list | dict | None = None,
+    period_type: str | None = None,
     prefer_consolidated: bool = True,
     prefer_current_year: bool = True,
 ) -> Optional[float]:
@@ -267,6 +242,12 @@ def pick_value(
     # 要素ID列
     eid_col = df.columns[0]
     
+    if isinstance(context_id, dict):
+        if period_type and period_type in context_id:
+            context_id = context_id[period_type]
+        else:
+            context_id = context_id.get("default")
+
     if context_id:
         # コンテキストID列
         cid_col = df.columns[2]
@@ -318,7 +299,9 @@ def pick_value(
     return v
 
 
-def calc_eps_bps_cfps(doc_df: pd.DataFrame) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+def calc_eps_bps_cfps(
+    doc_df: pd.DataFrame, period_type: str
+) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     """
     doc CSV DataFrame から EPS, CFPS, BPS を計算して返す。
     欠損があれば None。
@@ -327,21 +310,60 @@ def calc_eps_bps_cfps(doc_df: pd.DataFrame) -> Tuple[Optional[float], Optional[f
     # -----------------------------
     # 発行済株式数
     # -----------------------------
+    shares_context = {
+        "annual": [
+            CID_CurrentYearInstant,
+            CID_Prior1YearInstant,
+            CID_Prior2YearInstant,
+            CID_Prior3YearInstant,
+            CID_Prior4YearInstant,
+            CID_CurrentYearInstant_NonConsolidated,
+            CID_Prior1YearInstant_NonConsolidated,
+            CID_Prior2YearInstant_NonConsolidated,
+            CID_Prior3YearInstant_NonConsolidated,
+            CID_Prior4YearInstant_NonConsolidated,
+        ],
+        "semiannual": [
+            CID_InterimInstant,
+            CID_Prior1InterimInstant,
+            CID_Prior2InterimInstant,
+            CID_Prior3InterimInstant,
+            CID_Prior4InterimInstant,
+            CID_InterimInstant_NonConsolidatedMember,
+            CID_Prior1InterimInstant_NonConsolidatedMember,
+            CID_Prior2InterimInstant_NonConsolidatedMember,
+            CID_Prior3InterimInstant_NonConsolidatedMember,
+            CID_Prior4InterimInstant_NonConsolidatedMember,
+        ],
+        "quarterly": [
+            CID_CurrentYearInstant,
+            CID_InterimInstant,
+            CID_Prior1YearInstant,
+            CID_Prior1InterimInstant,
+            CID_Prior2YearInstant,
+            CID_Prior2InterimInstant,
+            CID_Prior3YearInstant,
+            CID_Prior3InterimInstant,
+            CID_Prior4YearInstant,
+            CID_Prior4InterimInstant,
+            CID_CurrentYearInstant_NonConsolidated,
+            CID_InterimInstant_NonConsolidatedMember,
+            CID_Prior1YearInstant_NonConsolidated,
+            CID_Prior1InterimInstant_NonConsolidatedMember,
+            CID_Prior2YearInstant_NonConsolidated,
+            CID_Prior2InterimInstant_NonConsolidatedMember,
+            CID_Prior3YearInstant_NonConsolidated,
+            CID_Prior3InterimInstant_NonConsolidatedMember,
+            CID_Prior4YearInstant_NonConsolidated,
+            CID_Prior4InterimInstant_NonConsolidatedMember,
+        ],
+    }
+
     issued_shares = pick_value(
         doc_df,
         EID_TNOIS,
-        context_id=[
-            CID_CurrentYearInstant,
-            CID_Prior4YearInstant,
-            CID_Prior3YearInstant,
-            CID_Prior2YearInstant,
-            CID_Prior1YearInstant,
-            CID_CurrentYearInstant_NonConsolidated,
-            CID_Prior4YearInstant_NonConsolidated,
-            CID_Prior3YearInstant_NonConsolidated,
-            CID_Prior2YearInstant_NonConsolidated,
-            CID_Prior1YearInstant_NonConsolidated,
-        ],
+        context_id=shares_context,
+        period_type=period_type,
         prefer_consolidated=True,
         prefer_current_year=True,
     )
@@ -613,7 +635,7 @@ def main() -> None:
                 # 読めない場合もスキップ
                 continue
 
-            eps, cfps, bps = calc_eps_bps_cfps(doc_df)
+            eps, cfps, bps = calc_eps_bps_cfps(doc_df, period_type)
 
             records.append(
                 {
@@ -689,7 +711,7 @@ def main() -> None:
 def test_S10078N0():
     doc_path = "./doc/jpcrp030000/S10078N0.csv"
     doc_df = pd.read_csv(doc_path)
-    eps, cfps, bps = calc_eps_bps_cfps(doc_df)
+    eps, cfps, bps = calc_eps_bps_cfps(doc_df, "annual")
     print(eps, cfps, bps)
 
 if __name__ == "__main__":
