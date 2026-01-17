@@ -66,6 +66,8 @@ CID_Prior3YearInstant  = "Prior3YearInstant"    # 三期前時点
 CID_Prior2YearInstant  = "Prior2YearInstant"    # 前々期末
 CID_Prior1YearInstant  = "Prior1YearInstant"    # 前期末
 CID_InterimInstant = "InterimInstant" # 当中間期末
+CID_Prior4InterimInstant = "Prior4InterimInstant" # 四期中間期末
+CID_Prior3InterimInstant = "Prior3InterimInstant" # 三期中間期末
 CID_Prior2InterimInstant = "Prior2InterimInstant" # 前々中間期末
 CID_Prior1InterimInstant = "Prior1InterimInstant" # 前中間期末
 
@@ -79,6 +81,8 @@ CID_Prior3YearInstant_NonConsolidatedMember  = "Prior3YearInstant_NonConsolidate
 CID_Prior2YearInstant_NonConsolidatedMember  = "Prior2YearInstant_NonConsolidatedMember"    # 前々期末
 CID_Prior1YearInstant_NonConsolidatedMember  = "Prior1YearInstant_NonConsolidatedMember"    # 前期末
 CID_InterimInstant_NonConsolidatedMember = "InterimInstant_NonConsolidatedMember" # 当中間期末
+CID_Prior4InterimInstant_NonConsolidatedMember = "Prior4InterimInstant_NonConsolidatedMember" # 四期前期間末末
+CID_Prior3InterimInstant_NonConsolidatedMember = "Prior3InterimInstant_NonConsolidatedMember" # 三期前期間末
 CID_Prior2InterimInstant_NonConsolidatedMember = "Prior2InterimInstant_NonConsolidatedMember" # 前々中間期末
 CID_Prior1InterimInstant_NonConsolidatedMember = "Prior1InterimInstant_NonConsolidatedMember" # 前中間期末
 
@@ -92,8 +96,11 @@ CID_Prior2YearDuration = "Prior2YearDuration"  # 前々期期間
 CID_Prior1YearDuration = "Prior1YearDuration"  # 前期期間
 CID_CurrentYearDuration = "CurrentYearDuration"  # 当期期間
 CID_InterimDuration = "InterimDuration"  # 当中間期末
+CID_Prior4InterimDuration = "Prior4InterimDuration" # 四期中間期
+CID_Prior3InterimDuration = "Prior3InterimDuration" # 三期中間期
 CID_Prior2InterimDuration = "Prior2InterimDuration" # 前々中間期
 CID_Prior1InterimDuration = "Prior1InterimDuration"	# 前中間期
+
 
 # -----------------------------
 # Duration（期間・非連結）
@@ -104,6 +111,8 @@ CID_Prior2YearDuration_NonConsolidated = "Prior2YearDuration_NonConsolidatedMemb
 CID_Prior1YearDuration_NonConsolidated = "Prior1YearDuration_NonConsolidatedMember"  # 前期期間（非連結）
 CID_CurrentYearDuration_NonConsolidated = "CurrentYearDuration_NonConsolidatedMember"  # 当期期間（非連結）
 CID_InterimDuration_NonConsolidatedMember = "InterimDuration_NonConsolidatedMember"  # 当中間期末
+CID_Prior4InterimDuration_NonConsolidatedMember = "Prior4InterimDuration_NonConsolidatedMember" # 四期中間期
+CID_Prior3InterimDuration_NonConsolidatedMember = "Prior3InterimDuration_NonConsolidatedMember" # 三期中間期
 CID_Prior2InterimDuration_NonConsolidatedMember = "Prior2InterimDuration_NonConsolidatedMember" # 前々中間期
 CID_Prior1InterimDuration_NonConsolidatedMember = "Prior1InterimDuration_NonConsolidatedMember"	# 前中間期
 
