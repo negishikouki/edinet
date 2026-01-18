@@ -188,45 +188,12 @@ def _sum_optional(values: Iterable[Optional[float]]) -> Optional[float]:
     return total if found else None
 
 
-def calc_ttm(records: list[dict], key: str) -> list[Optional[float]]:
-    annual: list[dict] = []
-    semiannual: list[dict] = []
-    quarterly: list[dict] = []
-    ttm_values: list[Optional[float]] = []
-
-    for rec in records:
-        period_type = rec["period_type"]
-        value = rec.get(key)
-        if period_type == "annual":
-            annual.append(rec)
-        elif period_type == "semiannual":
-            semiannual.append(rec)
-        elif period_type == "quarterly":
-            quarterly.append(rec)
-
-        ttm: Optional[float] = None
-        if period_type == "annual":
-            ttm = value
-        elif period_type == "semiannual":
-            if len(semiannual) >= 2:
-                values = [semiannual[-1].get(key), semiannual[-2].get(key)]
-                if all(v is not None for v in values):
-                    ttm = values[0] + values[1]
-        elif period_type == "quarterly":
-            if len(quarterly) >= 4:
-                values = [q.get(key) for q in quarterly[-4:]]
-                if all(v is not None for v in values):
-                    ttm = sum(values)
-        ttm_values.append(ttm)
-
-    return ttm_values
-
-
 def pick_value(
     df: pd.DataFrame,
     element_id: str,
     context_id: str | list | dict | None = None,
     period_type: str | None = None,
+    aggregate: str | None = None,
     prefer_consolidated: bool = True,
     prefer_current_year: bool = True,
 ) -> Optional[float]:
@@ -248,10 +215,64 @@ def pick_value(
         else:
             context_id = context_id.get("default")
 
-    if context_id:
-        # コンテキストID列
+    def pick_single_value(sub_df: pd.DataFrame) -> Optional[float]:
+        if sub_df.empty:
+            return None
+
+        if prefer_consolidated and "連結・個別" in sub_df.columns:
+            con = sub_df[sub_df["連結・個別"].astype(str).str.contains("連結", na=False)]
+            if not con.empty:
+                sub_df = con
+
+        if prefer_current_year and "相対年度" in sub_df.columns:
+            s = sub_df["相対年度"].astype(str)
+            cur = sub_df[s.isin(["0", "当期"])].copy()
+            if not cur.empty:
+                sub_df = cur
+
+        value_col = None
+        if "値" in sub_df.columns:
+            value_col = "値"
+        else:
+            for c in reversed(sub_df.columns):
+                if c == eid_col:
+                    continue
+                value_col = c
+                break
+
+        if value_col is None:
+            return None
+
+        return _to_float(sub_df.iloc[0][value_col])
+
+    def sum_contexts(contexts: Iterable[str]) -> Optional[float]:
         cid_col = df.columns[2]
-        if isinstance(context_id, Iterable):
+        values: list[float] = []
+        for cid in contexts:
+            sub_df = df[(df[eid_col].astype(str) == element_id) & (df[cid_col].astype(str) == cid)].copy()
+            value = pick_single_value(sub_df)
+            if value is None:
+                return None
+            values.append(value)
+        return sum(values) if values else None
+
+    if aggregate == "sum" and context_id:
+        if isinstance(context_id, list) and context_id and isinstance(context_id[0], list):
+            for option in context_id:
+                value = sum_contexts(option)
+                if value is not None:
+                    return value
+            return None
+
+        if isinstance(context_id, list):
+            return sum_contexts(context_id)
+
+        if isinstance(context_id, str):
+            return sum_contexts([context_id])
+
+    if context_id:
+        cid_col = df.columns[2]
+        if isinstance(context_id, Iterable) and not isinstance(context_id, (str, bytes)):
             for cid in context_id:
                 sub = df[(df[eid_col].astype(str) == element_id) & (df[cid_col].astype(str) == cid)].copy()
                 if not sub.empty:
@@ -260,43 +281,8 @@ def pick_value(
             sub = df[(df[eid_col].astype(str) == element_id) & (df[cid_col].astype(str) == context_id)].copy()
     else:
         sub = df[df[eid_col].astype(str) == element_id].copy()
-    if sub.empty:
-        return None
 
-    # フィルタ優先
-    if prefer_consolidated and "連結・個別" in sub.columns:
-        # よくある表記例: "連結" / "個別" / "連結財務諸表" 等
-        # "連結" を含むものを優先
-        con = sub[sub["連結・個別"].astype(str).str.contains("連結", na=False)]
-        if not con.empty:
-            sub = con
-
-    if prefer_current_year and "相対年度" in sub.columns:
-        # 当期=0 を優先（もし文字列なら0相当を拾う）
-        # 例: 0, "0", "当期" など揺れがある可能性に軽く対応
-        s = sub["相対年度"].astype(str)
-        cur = sub[s.isin(["0", "当期"])].copy()
-        if not cur.empty:
-            sub = cur
-
-    # 値列推定：よくある「値」列を優先、なければ末尾列から探す
-    value_col = None
-    if "値" in sub.columns:
-        value_col = "値"
-    else:
-        # 値っぽい列を後ろから探す
-        for c in reversed(sub.columns):
-            if c == eid_col:
-                continue
-            # 単位やテキストを避けたいが完全には無理なので、最後の列を優先
-            value_col = c
-            break
-
-    if value_col is None:
-        return None
-
-    v = _to_float(sub.iloc[0][value_col])
-    return v
+    return pick_single_value(sub)
 
 
 def calc_eps_bps_cfps(
@@ -377,18 +363,40 @@ def calc_eps_bps_cfps(
             prefer_current_year=True,
         )
 
+    ttm_duration_contexts = {
+        "annual": [
+            [CID_CurrentYearDuration],
+            [CID_CurrentYearDuration_NonConsolidated],
+        ],
+        "semiannual": [
+            [CID_InterimDuration, CID_Prior1InterimDuration],
+            [CID_InterimDuration_NonConsolidatedMember, CID_Prior1InterimDuration_NonConsolidatedMember],
+        ],
+        "quarterly": [
+            [
+                CID_CurrentYearDuration,
+                CID_Prior1YearDuration,
+                CID_Prior2YearDuration,
+                CID_Prior3YearDuration,
+            ],
+            [
+                CID_CurrentYearDuration_NonConsolidated,
+                CID_Prior1YearDuration_NonConsolidated,
+                CID_Prior2YearDuration_NonConsolidated,
+                CID_Prior3YearDuration_NonConsolidated,
+            ],
+        ],
+    }
+
     # -----------------------------
     # EPS
     # -----------------------------
     eps = pick_value(
         doc_df,
         EID_B_ELPS,
-            context_id=[
-                CID_CurrentYTDDuration,
-                CID_CurrentYearDuration,
-                CID_CurrentYearDuration_NonConsolidated,
-                CID_CurrentYearInstant_NonConsolidated,
-            ],
+        context_id=ttm_duration_contexts,
+        period_type=period_type,
+        aggregate="sum",
         prefer_consolidated=True,
         prefer_current_year=True,
     )
@@ -397,12 +405,9 @@ def calc_eps_bps_cfps(
         eps = pick_value(
             doc_df,
             EID_D_ELPS,
-            context_id=[
-                CID_CurrentYTDDuration,
-                CID_CurrentYearDuration,
-                CID_CurrentYearDuration_NonConsolidated,
-                CID_CurrentYearInstant_NonConsolidated,
-            ],
+            context_id=ttm_duration_contexts,
+            period_type=period_type,
+            aggregate="sum",
             prefer_consolidated=True,
             prefer_current_year=True,
         )
@@ -411,7 +416,9 @@ def calc_eps_bps_cfps(
         profit = pick_value(
             doc_df,
             EID_PROFIT_TO_OWNERS,
-            context_id=None,
+            context_id=ttm_duration_contexts,
+            period_type=period_type,
+            aggregate="sum",
             prefer_consolidated=True,
             prefer_current_year=True,
         )
@@ -457,11 +464,9 @@ def calc_eps_bps_cfps(
     ocf = pick_value(
         doc_df,
         EID_NCPBUIOA,
-        context_id=[
-            CID_CurrentYTDDuration,
-            CID_CurrentYearDuration,
-            CID_CurrentYearDuration_NonConsolidated,
-        ],
+        context_id=ttm_duration_contexts,
+        period_type=period_type,
+        aggregate="sum",
         prefer_consolidated=True,
         prefer_current_year=True,
     )
@@ -470,7 +475,9 @@ def calc_eps_bps_cfps(
         ocf = pick_value(
             doc_df,
             EID_OCF,
-            context_id=None,
+            context_id=ttm_duration_contexts,
+            period_type=period_type,
+            aggregate="sum",
             prefer_consolidated=True,
             prefer_current_year=True,
         )
@@ -542,11 +549,9 @@ def calc_eps_bps_cfps(
         icf = pick_value(
             doc_df,
             EID_NCPBUIIA,
-            context_id=[
-                CID_CurrentYTDDuration,
-                CID_CurrentYearDuration,
-                CID_CurrentYearDuration_NonConsolidated,
-            ],
+            context_id=ttm_duration_contexts,
+            period_type=period_type,
+            aggregate="sum",
             prefer_consolidated=True,
             prefer_current_year=True,
         )
@@ -555,7 +560,9 @@ def calc_eps_bps_cfps(
             icf = pick_value(
                 doc_df,
                 EID_ICF,
-                context_id=None,
+                context_id=ttm_duration_contexts,
+                period_type=period_type,
+                aggregate="sum",
                 prefer_consolidated=True,
                 prefer_current_year=True,
             )
@@ -678,17 +685,14 @@ def main() -> None:
         raw_out_path = RAW_OUT_ROOT / f"{sec_code}.csv"
         raw_df.to_csv(raw_out_path, index=False, encoding="utf-8-sig")
 
-        eps_ttm = calc_ttm(records, "EPS")
-        cfps_ttm = calc_ttm(records, "CFPS")
-
         rows = []
-        for rec, eps_value, cfps_value in zip(records, eps_ttm, cfps_ttm):
+        for rec in records:
             rows.append(
                 {
                     "date": rec["date"],
                     "secCode": rec["secCode"],
-                    "EPS": eps_value,
-                    "CFPS": cfps_value,
+                    "EPS": rec["EPS"],
+                    "CFPS": rec["CFPS"],
                     "BPS": rec["BPS"],  # BPSは時点値のためTTM化しない
                     "docTypeCode": rec["docTypeCode"],
                     "periodType": rec["period_type"],
