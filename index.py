@@ -14,7 +14,6 @@ LISTUP_CSV = Path("./listup.csv")
 UPDATED_LISTUP_CSV = Path("./updated_listup.csv")
 DOC_ROOT = Path("./doc")      # docID.csv を再帰探索するルート
 OUT_ROOT = Path("./index")    # secCode別の出力先
-RAW_OUT_ROOT = Path("./index_raw")  # TTM集計前の出力先
 
 # EDINET（jppfs_cor）最小セット
 # EPS
@@ -608,7 +607,6 @@ def main() -> None:
 
     # 出力先作成
     OUT_ROOT.mkdir(parents=True, exist_ok=True)
-    RAW_OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
     # secCodeごとに処理
     for sec_code, g in tqdm(
@@ -662,28 +660,6 @@ def main() -> None:
             continue
 
         records.sort(key=lambda item: (item["date_dt"], item["date"]))
-
-        raw_rows = []
-        for rec in records:
-            raw_rows.append(
-                {
-                    "date": rec["date"],
-                    "secCode": rec["secCode"],
-                    "EPS": rec["EPS"],
-                    "CFPS": rec["CFPS"],
-                    "BPS": rec["BPS"],
-                    "docTypeCode": rec["docTypeCode"],
-                    "periodType": rec["period_type"],
-                }
-            )
-
-        raw_df = pd.DataFrame(raw_rows)
-
-        raw_dt = pd.to_datetime(raw_df["date"], errors="coerce")
-        raw_df.loc[raw_dt.notna(), "date"] = raw_dt[raw_dt.notna()].dt.strftime("%Y-%m-%d")
-
-        raw_out_path = RAW_OUT_ROOT / f"{sec_code}.csv"
-        raw_df.to_csv(raw_out_path, index=False, encoding="utf-8-sig")
 
         rows = []
         for rec in records:
