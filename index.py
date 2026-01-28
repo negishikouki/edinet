@@ -239,12 +239,21 @@ def pick_value(
 
     # 要素ID列
     eid_col = df.columns[0]
+    cid_col = df.columns[2]
+    eid_str = df[eid_col].astype(str)
+    cid_str: Optional[pd.Series] = None
     
     if isinstance(context_id, dict):
         if period_type and period_type in context_id:
             context_id = context_id[period_type]
         else:
             context_id = context_id.get("default")
+
+    def get_cid_str() -> pd.Series:
+        nonlocal cid_str
+        if cid_str is None:
+            cid_str = df[cid_col].astype(str)
+        return cid_str
 
     def pick_single_value(sub_df: pd.DataFrame) -> Optional[float]:
         if sub_df.empty:
@@ -257,7 +266,7 @@ def pick_value(
 
         if prefer_current_year and "相対年度" in sub_df.columns:
             s = sub_df["相対年度"].astype(str)
-            cur = sub_df[s.isin(["0", "当期"])].copy()
+            cur = sub_df[s.isin(["0", "当期"])]
             if not cur.empty:
                 sub_df = cur
 
@@ -277,10 +286,11 @@ def pick_value(
         return _to_float(sub_df.iloc[0][value_col])
 
     def sum_contexts(contexts: Iterable[str]) -> Optional[float]:
-        cid_col = df.columns[2]
+        cid_series = get_cid_str()
+        eid_mask = eid_str == element_id
         values: list[float] = []
         for cid in contexts:
-            sub_df = df[(df[eid_col].astype(str) == element_id) & (df[cid_col].astype(str) == cid)].copy()
+            sub_df = df[(eid_mask) & (cid_series == cid)]
             value = pick_single_value(sub_df)
             if value is None:
                 return None
@@ -302,16 +312,16 @@ def pick_value(
             return sum_contexts([context_id])
 
     if context_id:
-        cid_col = df.columns[2]
+        cid_series = get_cid_str()
         if isinstance(context_id, Iterable) and not isinstance(context_id, (str, bytes)):
             for cid in context_id:
-                sub = df[(df[eid_col].astype(str) == element_id) & (df[cid_col].astype(str) == cid)].copy()
+                sub = df[(eid_str == element_id) & (cid_series == cid)]
                 if not sub.empty:
                     break
         else:
-            sub = df[(df[eid_col].astype(str) == element_id) & (df[cid_col].astype(str) == context_id)].copy()
+            sub = df[(eid_str == element_id) & (cid_series == context_id)]
     else:
-        sub = df[df[eid_col].astype(str) == element_id].copy()
+        sub = df[eid_str == element_id]
 
     return pick_single_value(sub)
 
