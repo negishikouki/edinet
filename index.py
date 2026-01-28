@@ -663,8 +663,8 @@ def main() -> None:
             total=listup["secCode"].nunique(),
             desc="secCode"
         ):
-        records = []
 
+        list_doc_df = []
         for _, r in g.iterrows():
             date_str = str(r["date"])
             date_dt = r["date_dt"]
@@ -685,10 +685,13 @@ def main() -> None:
 
             try:
                 doc_df = pd.read_csv(doc_path)
+                list_doc_df.append(doc_df)
             except Exception:
                 # 読めない場合もスキップ
                 continue
 
+        records = []
+        for doc_df in list_doc_df:
             eps, cfps, bps = calc_eps_bps_cfps(doc_df, period_type)
 
             records.append(
