@@ -27,22 +27,54 @@ EID_NET_ASSETS_PER_SHARE = "jpcrp_cor:NetAssetsPerShareSummaryOfBusinessResults"
 EID_NET_ASSETS = "jppfs_cor:NetAssets"                                     # 純資産合計
 EID_SHARES_OUT = "jppfs_cor:NumberOfSharesOutstanding"                     # 期末発行済株式数
 
-# 営業CF
-EID_OCF = "jppfs_cor:NetCashProvidedByUsedInOperatingActivities"           # 営業CF
-EID_NCPBUIOA = "jpcrp_cor:NetCashProvidedByUsedInOperatingActivitiesSummaryOfBusinessResults" # 営業活動によるキャッシュ・フロー、経営指標等
+# 営業CF（J-GAAP / IFRS / JMIS / US GAAP）
+EIDS_OCF = [
+    "jpcrp_cor:NetCashProvidedByUsedInOperatingActivitiesSummaryOfBusinessResults",  # J-GAAP（経営指標等）
+    "jpcrp_cor:CashFlowsFromUsedInOperatingActivitiesIFRSSummaryOfBusinessResults",  # IFRS（経営指標等）
+    "jpcrp_cor:CashFlowsFromUsedInOperatingActivitiesJMISSummaryOfBusinessResults",  # JMIS（経営指標等）
+    "jpcrp_cor:CashFlowsFromUsedInOperatingActivitiesUSGAAPSummaryOfBusinessResults",  # US GAAP（経営指標等）
+    "jppfs_cor:NetCashProvidedByUsedInOperatingActivities",  # J-GAAP（CF本表）
+    "jpigp_cor:NetCashProvidedByUsedInOperatingActivitiesIFRS",  # IFRS（CF本表）
+]
 
-# 投資CF
-EID_ICF = "jppfs_cor:NetCashProvidedByUsedInInvestingActivities"           # 投資CF
-EID_NCPBUIIA = "jpcrp_cor:NetCashProvidedByUsedInInvestingActivitiesSummaryOfBusinessResults" # 投資活動によるキャッシュ・フロー、経営指標等
+# 投資CF（J-GAAP / IFRS / JMIS / US GAAP）
+EIDS_ICF = [
+    "jpcrp_cor:NetCashProvidedByUsedInInvestingActivitiesSummaryOfBusinessResults",  # J-GAAP（経営指標等）
+    "jpcrp_cor:CashFlowsFromUsedInInvestingActivitiesIFRSSummaryOfBusinessResults",  # IFRS（経営指標等）
+    "jpcrp_cor:CashFlowsFromUsedInInvestingActivitiesJMISSummaryOfBusinessResults",  # JMIS（経営指標等）
+    "jpcrp_cor:CashFlowsFromUsedInInvestingActivitiesUSGAAPSummaryOfBusinessResults",  # US GAAP（経営指標等）
+    "jppfs_cor:NetCashProvidedByUsedInInvestingActivities",  # J-GAAP（CF本表）
+    "jpigp_cor:NetCashProvidedByUsedInInvestingActivitiesIFRS",  # IFRS（CF本表）
+]
 
 # 財務CF（FCFE向け）
-EID_NET_INCREASE_DECREASE_ST_LOANS = "jppfs_cor:NetIncreaseDecreaseInShortTermLoansPayableFinCF"  # 短期借入金の純増減額
-EID_PROCEEDS_LT_LOANS = "jppfs_cor:ProceedsFromLongTermLoansPayableFinCF"  # 長期借入れによる収入
-EID_REPAYMENT_LT_LOANS = "jppfs_cor:RepaymentOfLongTermLoansPayableFinCF"  # 長期借入金の返済による支出
+EIDS_NET_INCREASE_DECREASE_ST_LOANS = [
+    "jppfs_cor:NetIncreaseDecreaseInShortTermLoansPayableFinCF",  # J-GAAP
+    "jpigp_cor:NetIncreaseDecreaseInShortTermBorrowingsFinCFIFRS",  # IFRS
+]
+EIDS_PROCEEDS_LT_LOANS = [
+    "jppfs_cor:ProceedsFromLongTermLoansPayableFinCF",  # J-GAAP
+    "jpigp_cor:ProceedsFromLongTermBorrowingsFinCFIFRS",  # IFRS
+    "jpigp_cor:ProceedsFromIssuanceOfBondsAndLongTermBorrowingsFinCFIFRS",  # IFRS（代替）
+]
+EIDS_REPAYMENT_LT_LOANS = [
+    "jppfs_cor:RepaymentOfLongTermLoansPayableFinCF",  # J-GAAP
+    "jpigp_cor:RepaymentsOfLongTermBorrowingsFinCFIFRS",  # IFRS
+    "jpigp_cor:RedemptionOfBondsAndRepaymentsOfLongTermBorrowingsFinCFIFRS",  # IFRS（代替）
+]
 
 # 投資（CAPEX）
-EID_PPE_PURCHASE = "jppfs_cor:PurchaseOfPropertyPlantAndEquipmentInvCF"  # 有形固定資産の取得
-EID_INTANGIBLE_PURCHASE = "jppfs_cor:PurchaseOfIntangibleAssetsInvCF"    # 無形固定資産の取得
+EIDS_CAPEX_COMBINED = [
+    "jpigp_cor:PurchaseOfPropertyPlantAndEquipmentAndIntangibleAssetsInvCFIFRS",  # IFRS（PPE+無形合算）
+]
+EIDS_PPE_PURCHASE = [
+    "jppfs_cor:PurchaseOfPropertyPlantAndEquipmentInvCF",  # J-GAAP
+    "jpigp_cor:PurchaseOfPropertyPlantAndEquipmentInvCFIFRS",  # IFRS
+]
+EIDS_INTANGIBLE_PURCHASE = [
+    "jppfs_cor:PurchaseOfIntangibleAssetsInvCF",  # J-GAAP
+    "jpigp_cor:PurchaseOfIntangibleAssetsInvCFIFRS",  # IFRS
+]
 
 # Issued Shares
 EID_TNOIS = "jpcrp_cor:TotalNumberOfIssuedSharesSummaryOfBusinessResults"  # 発行済株式総数（普通株式）、経営指標等
@@ -284,6 +316,36 @@ def pick_value(
     return pick_single_value(sub)
 
 
+def pick_value_any(
+    df: pd.DataFrame,
+    element_ids: Iterable[str] | str,
+    context_id: str | list | dict | None = None,
+    period_type: str | None = None,
+    aggregate: str | None = None,
+    prefer_consolidated: bool = True,
+    prefer_current_year: bool = True,
+) -> Optional[float]:
+    """
+    複数の要素ID候補を順番に評価し、最初に見つかった値を返す。
+    """
+    if isinstance(element_ids, (str, bytes)):
+        element_ids = [element_ids]
+
+    for element_id in element_ids:
+        value = pick_value(
+            df,
+            element_id,
+            context_id=context_id,
+            period_type=period_type,
+            aggregate=aggregate,
+            prefer_consolidated=prefer_consolidated,
+            prefer_current_year=prefer_current_year,
+        )
+        if value is not None:
+            return value
+    return None
+
+
 def calc_eps_bps_cfps(
     doc_df: pd.DataFrame, period_type: str
 ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
@@ -460,9 +522,9 @@ def calc_eps_bps_cfps(
     # CFPS（FCFEベース：厳密版）
     # -----------------------------
     # 営業CF
-    ocf = pick_value(
+    ocf = pick_value_any(
         doc_df,
-        EID_NCPBUIOA,
+        EIDS_OCF,
         context_id=ttm_duration_contexts,
         period_type=period_type,
         aggregate="sum",
@@ -470,55 +532,53 @@ def calc_eps_bps_cfps(
         prefer_current_year=True,
     )
 
-    if ocf is None:
-        ocf = pick_value(
-            doc_df,
-            EID_OCF,
-            context_id=ttm_duration_contexts,
-            period_type=period_type,
-            aggregate="sum",
-            prefer_consolidated=True,
-            prefer_current_year=True,
-        )
-
     # CAPEX（有形＋無形）
-    capex = _sum_optional([
-        pick_value(
-            doc_df,
-            EID_PPE_PURCHASE,
-            context_id=None,
-            prefer_consolidated=True,
-            prefer_current_year=True,
-        ),
-        pick_value(
-            doc_df,
-            EID_INTANGIBLE_PURCHASE,
-            context_id=None,
-            prefer_consolidated=True,
-            prefer_current_year=True,
-        ),
-    ])
+    capex = pick_value_any(
+        doc_df,
+        EIDS_CAPEX_COMBINED,
+        context_id=None,
+        prefer_consolidated=True,
+        prefer_current_year=True,
+    )
+
+    if capex is None:
+        capex = _sum_optional([
+            pick_value_any(
+                doc_df,
+                EIDS_PPE_PURCHASE,
+                context_id=None,
+                prefer_consolidated=True,
+                prefer_current_year=True,
+            ),
+            pick_value_any(
+                doc_df,
+                EIDS_INTANGIBLE_PURCHASE,
+                context_id=None,
+                prefer_consolidated=True,
+                prefer_current_year=True,
+            ),
+        ])
 
     # 純借入額
-    st_delta = pick_value(
+    st_delta = pick_value_any(
         doc_df,
-        EID_NET_INCREASE_DECREASE_ST_LOANS,
+        EIDS_NET_INCREASE_DECREASE_ST_LOANS,
         context_id=None,
         prefer_consolidated=True,
         prefer_current_year=True,
     )
 
-    lt_proceeds = pick_value(
+    lt_proceeds = pick_value_any(
         doc_df,
-        EID_PROCEEDS_LT_LOANS,
+        EIDS_PROCEEDS_LT_LOANS,
         context_id=None,
         prefer_consolidated=True,
         prefer_current_year=True,
     )
 
-    lt_repayment = pick_value(
+    lt_repayment = pick_value_any(
         doc_df,
-        EID_REPAYMENT_LT_LOANS,
+        EIDS_REPAYMENT_LT_LOANS,
         context_id=None,
         prefer_consolidated=True,
         prefer_current_year=True,
@@ -545,26 +605,15 @@ def calc_eps_bps_cfps(
     cfps = (fcfe / issued_shares) if (fcfe is not None and issued_shares not in (None, 0.0)) else None
 
     if cfps is None:
-        icf = pick_value(
+        icf = pick_value_any(
             doc_df,
-            EID_NCPBUIIA,
+            EIDS_ICF,
             context_id=ttm_duration_contexts,
             period_type=period_type,
             aggregate="sum",
             prefer_consolidated=True,
             prefer_current_year=True,
         )
-
-        if icf is None:
-            icf = pick_value(
-                doc_df,
-                EID_ICF,
-                context_id=ttm_duration_contexts,
-                period_type=period_type,
-                aggregate="sum",
-                prefer_consolidated=True,
-                prefer_current_year=True,
-            )
 
         fcff = _sum_optional([ocf, icf])
         cfps = (fcff / issued_shares) if (fcff is not None and issued_shares not in (None, 0.0)) else None
