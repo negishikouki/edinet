@@ -674,6 +674,9 @@ def main() -> None:
             desc="secCode"
         ):
 
+        if sec_code != '29360':
+            continue
+
         list_doc_df = []
         for _, r in g.iterrows():
             date_str = str(r["date"])
@@ -695,13 +698,13 @@ def main() -> None:
 
             try:
                 doc_df = pd.read_csv(doc_path)
-                list_doc_df.append(doc_df)
+                list_doc_df.append((doc_df, period_type))
             except Exception:
                 # 読めない場合もスキップ
                 continue
 
         records = []
-        for doc_df in list_doc_df:
+        for doc_df, period_type in list_doc_df:
             eps, cfps, bps = calc_eps_bps_cfps(doc_df, period_type)
 
             records.append(
@@ -751,7 +754,7 @@ def main() -> None:
 
 
 def test_S10078N0():
-    doc_path = "./doc/jpcrp030000/S10078N0.csv"
+    doc_path = r"D:\source\repos\edinet\doc\jpcrp030000\S100VUG5.csv"
     doc_df = pd.read_csv(doc_path)
     eps, cfps, bps = calc_eps_bps_cfps(doc_df, "annual")
     print(eps, cfps, bps)
