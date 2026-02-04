@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -188,6 +189,38 @@ def build_doc_index(doc_root: Path) -> Dict[str, Path]:
         if name not in index:
             index[name] = p
     return index
+
+
+def write_csv_utf8sig(df: pl.DataFrame, path: Path) -> None:
+    try:
+        df.write_csv(path, include_bom=True)
+        return
+    except TypeError:
+        pass
+
+    csv_bytes = None
+    try:
+        csv_text = df.write_csv()
+        if isinstance(csv_text, bytes):
+            csv_bytes = csv_text
+        elif isinstance(csv_text, str):
+            csv_bytes = csv_text.encode("utf-8")
+    except TypeError:
+        pass
+
+    if csv_bytes is None:
+        try:
+            buf = io.StringIO()
+            df.write_csv(buf)
+            csv_bytes = buf.getvalue().encode("utf-8")
+        except Exception:
+            buf = io.BytesIO()
+            df.write_csv(buf)
+            csv_bytes = buf.getvalue()
+
+    with open(path, "wb") as f:
+        f.write(b"\xef\xbb\xbf")
+        f.write(csv_bytes)
 
 
 def _to_float(x) -> Optional[float]:
@@ -778,7 +811,7 @@ def main() -> None:
 
         # secCodeごとにCSV出力
         out_path = OUT_ROOT / f"{sec_code}.csv"
-        out_df.write_csv(out_path, encoding="utf-8-sig")
+        write_csv_utf8sig(out_df, out_path)
 
     print("done.")
 
