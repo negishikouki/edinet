@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 from collections.abc import Iterable
 
-import pandas as pd
+import polars as pl
 from tqdm import tqdm
 
 # =========================
@@ -196,7 +197,7 @@ def _to_float(x) -> Optional[float]:
     if x is None:
         return None
     try:
-        if pd.isna(x):
+        if isinstance(x, float) and x != x:
             return None
         # 文字列のカンマ等を除去
         if isinstance(x, str):
@@ -220,7 +221,7 @@ def _sum_optional(values: Iterable[Optional[float]]) -> Optional[float]:
 
 
 def pick_value(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     element_id: str,
     context_id: str | list | dict | None = None,
     period_type: str | None = None,
@@ -234,40 +235,36 @@ def pick_value(
     - 相対年度（列名に "相対年度" がある想定）: 当期(0)を優先
     条件列が存在しない場合は存在する行の先頭を採用。
     """
-    if df.empty:
+    if df.is_empty():
         return None
 
     # 要素ID列
     eid_col = df.columns[0]
     cid_col = df.columns[2]
-    eid_str = df[eid_col].astype(str)
-    cid_str: Optional[pd.Series] = None
-    
+    cid_col_expr = pl.col(cid_col).cast(pl.Utf8)
+
     if isinstance(context_id, dict):
         if period_type and period_type in context_id:
             context_id = context_id[period_type]
         else:
             context_id = context_id.get("default")
 
-    def get_cid_str() -> pd.Series:
-        nonlocal cid_str
-        if cid_str is None:
-            cid_str = df[cid_col].astype(str)
-        return cid_str
-
-    def pick_single_value(sub_df: pd.DataFrame) -> Optional[float]:
-        if sub_df.empty:
+    def pick_single_value(sub_df: pl.DataFrame) -> Optional[float]:
+        if sub_df.is_empty():
             return None
 
         if prefer_consolidated and "連結・個別" in sub_df.columns:
-            con = sub_df[sub_df["連結・個別"].astype(str).str.contains("連結", na=False)]
-            if not con.empty:
+            con = sub_df.filter(
+                pl.col("連結・個別").cast(pl.Utf8).str.contains("連結")
+            )
+            if not con.is_empty():
                 sub_df = con
 
         if prefer_current_year and "相対年度" in sub_df.columns:
-            s = sub_df["相対年度"].astype(str)
-            cur = sub_df[s.isin(["0", "当期"])]
-            if not cur.empty:
+            cur = sub_df.filter(
+                pl.col("相対年度").cast(pl.Utf8).is_in(["0", "当期"])
+            )
+            if not cur.is_empty():
                 sub_df = cur
 
         value_col = None
@@ -283,14 +280,15 @@ def pick_value(
         if value_col is None:
             return None
 
-        return _to_float(sub_df.iloc[0][value_col])
+        return _to_float(sub_df.get_column(value_col)[0])
 
     def sum_contexts(contexts: Iterable[str]) -> Optional[float]:
-        cid_series = get_cid_str()
-        eid_mask = eid_str == element_id
         values: list[float] = []
         for cid in contexts:
-            sub_df = df[(eid_mask) & (cid_series == cid)]
+            sub_df = df.filter(
+                (pl.col(eid_col).cast(pl.Utf8) == element_id)
+                & (cid_col_expr == cid)
+            )
             value = pick_single_value(sub_df)
             if value is None:
                 return None
@@ -312,22 +310,27 @@ def pick_value(
             return sum_contexts([context_id])
 
     if context_id:
-        cid_series = get_cid_str()
         if isinstance(context_id, Iterable) and not isinstance(context_id, (str, bytes)):
             for cid in context_id:
-                sub = df[(eid_str == element_id) & (cid_series == cid)]
-                if not sub.empty:
+                sub = df.filter(
+                    (pl.col(eid_col).cast(pl.Utf8) == element_id)
+                    & (cid_col_expr == cid)
+                )
+                if not sub.is_empty():
                     break
         else:
-            sub = df[(eid_str == element_id) & (cid_series == context_id)]
+            sub = df.filter(
+                (pl.col(eid_col).cast(pl.Utf8) == element_id)
+                & (cid_col_expr == context_id)
+            )
     else:
-        sub = df[eid_str == element_id]
+        sub = df.filter(pl.col(eid_col).cast(pl.Utf8) == element_id)
 
     return pick_single_value(sub)
 
 
 def pick_value_any(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     element_ids: Iterable[str] | str,
     context_id: str | list | dict | None = None,
     period_type: str | None = None,
@@ -357,7 +360,7 @@ def pick_value_any(
 
 
 def calc_eps_bps_cfps(
-    doc_df: pd.DataFrame, period_type: str
+    doc_df: pl.DataFrame, period_type: str
 ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     """
     doc CSV DataFrame から EPS, CFPS, BPS を計算して返す。
@@ -638,28 +641,48 @@ def calc_eps_bps_cfps(
 def main() -> None:
     # listup.csv 読み込み
     listup_path = UPDATED_LISTUP_CSV if UPDATED_LISTUP_CSV.exists() else LISTUP_CSV
-    listup = pd.read_csv(listup_path, low_memory=False)
+    listup = pl.read_csv(listup_path)
 
     required_cols = {"secCode", "date", "docID", "edinetCode", "docTypeCode"}
     missing = required_cols - set(listup.columns)
     if missing:
         raise ValueError(f"listup.csv に必要な列がありません: {sorted(missing)}")
 
-    listup = listup.copy()
-    listup["date_dt"] = pd.to_datetime(listup["date"], errors="coerce")
+    listup = listup.with_columns(
+        pl.col("date")
+        .cast(pl.Utf8)
+        .str.strptime(pl.Datetime, strict=False)
+        .alias("date_dt")
+    )
 
     # edinetCodeで最新のsecCodeを取得し、全件に反映
-    non_null_sec = listup[listup["secCode"].notna()].sort_values(
-        ["date_dt", "date"], ascending=[True, True]
+    non_null_sec = (
+        listup.filter(pl.col("secCode").is_not_null())
+        .sort(["date_dt", "date"], nulls_last=True)
     )
-    latest_sec_code = non_null_sec.groupby("edinetCode", dropna=False)["secCode"].last()
-    listup["secCode"] = listup["edinetCode"].map(latest_sec_code).fillna(listup["secCode"])
+    latest_sec_code_df = non_null_sec.group_by("edinetCode", maintain_order=True).agg(
+        pl.col("secCode").last()
+    )
+    latest_sec_code = dict(
+        zip(
+            latest_sec_code_df.get_column("edinetCode").to_list(),
+            latest_sec_code_df.get_column("secCode").to_list(),
+        )
+    )
+    listup = listup.with_columns(
+        pl.coalesce(
+            [
+                pl.col("edinetCode").map_dict(latest_sec_code),
+                pl.col("secCode"),
+            ]
+        ).alias("secCode")
+    )
 
     # secCodeでGroupBy、dateでOrderBy
     # dateは文字列でも良いが、並びが崩れそうならdatetime化
     # ここでは datetime化してから出力時は YYYY-MM-DD に戻す
     # dateが壊れている行は最後に回す
-    listup = listup.sort_values(["secCode", "date_dt", "date"], ascending=[True, True, True])
+    listup = listup.sort(["secCode", "date_dt", "date"], nulls_last=True)
 
     # docディレクトリを走査してファイル名->パスのindexを作る（高速化）
     doc_index = build_doc_index(DOC_ROOT)
@@ -668,18 +691,24 @@ def main() -> None:
     OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
     # secCodeごとに処理
+    sec_codes = (
+        listup.get_column("secCode")
+        .drop_nulls()
+        .unique(maintain_order=True)
+        .to_list()
+    )
     for sec_code, g in tqdm(
-            listup.groupby("secCode", sort=False),
-            total=listup["secCode"].nunique(),
+            ((code, listup.filter(pl.col("secCode") == code)) for code in sec_codes),
+            total=len(sec_codes),
             desc="secCode"
         ):
 
         list_doc_df = []
-        for _, r in g.iterrows():
+        for r in g.iter_rows(named=True):
             date_str = str(r["date"])
             date_dt = r["date_dt"]
-            if pd.isna(date_dt):
-                date_dt = pd.Timestamp.min
+            if date_dt is None:
+                date_dt = datetime.min
             doc_id = str(r["docID"])
             doc_type_code = str(r["docTypeCode"])
             fname = f"{doc_id}.csv"
@@ -694,7 +723,7 @@ def main() -> None:
                 continue
 
             try:
-                doc_df = pd.read_csv(doc_path)
+                doc_df = pl.read_csv(doc_path)
                 list_doc_df.append((doc_df, period_type))
             except Exception:
                 # 読めない場合もスキップ
@@ -737,22 +766,27 @@ def main() -> None:
                 }
             )
 
-        out_df = pd.DataFrame(rows)
+        out_df = pl.DataFrame(rows)
 
         # dateを可能なら整形（YYYY-MM-DD）
-        dt = pd.to_datetime(out_df["date"], errors="coerce")
-        out_df.loc[dt.notna(), "date"] = dt[dt.notna()].dt.strftime("%Y-%m-%d")
+        date_parsed = pl.col("date").cast(pl.Utf8).str.strptime(pl.Date, strict=False)
+        out_df = out_df.with_columns(
+            pl.when(date_parsed.is_not_null())
+            .then(date_parsed.dt.strftime("%Y-%m-%d"))
+            .otherwise(pl.col("date").cast(pl.Utf8))
+            .alias("date")
+        )
 
         # secCodeごとにCSV出力
         out_path = OUT_ROOT / f"{sec_code}.csv"
-        out_df.to_csv(out_path, index=False, encoding="utf-8-sig")
+        out_df.write_csv(out_path, encoding="utf-8-sig")
 
     print("done.")
 
 
 def test_S10078N0():
     doc_path = r"D:\source\repos\edinet\doc\jpcrp030000\S100VUG5.csv"
-    doc_df = pd.read_csv(doc_path)
+    doc_df = pl.read_csv(doc_path)
     eps, cfps, bps = calc_eps_bps_cfps(doc_df, "annual")
     print(eps, cfps, bps)
 
