@@ -665,21 +665,19 @@ def main() -> None:
         .sort(["date_dt", "date"], nulls_last=True)
     )
     latest_sec_code_df = non_null_sec.group_by("edinetCode", maintain_order=True).agg(
-        pl.col("secCode").last()
+        pl.col("secCode").last().alias("latest_secCode")
     )
-    latest_sec_code = dict(
-        zip(
-            latest_sec_code_df.get_column("edinetCode").to_list(),
-            latest_sec_code_df.get_column("secCode").to_list(),
+    listup = (
+        listup.join(latest_sec_code_df, on="edinetCode", how="left")
+        .with_columns(
+            pl.coalesce(
+                [
+                    pl.col("latest_secCode"),
+                    pl.col("secCode"),
+                ]
+            ).alias("secCode")
         )
-    )
-    listup = listup.with_columns(
-        pl.coalesce(
-            [
-                pl.col("edinetCode").map_dict(latest_sec_code),
-                pl.col("secCode"),
-            ]
-        ).alias("secCode")
+        .drop("latest_secCode")
     )
 
     # secCodeでGroupBy、dateでOrderBy
