@@ -674,9 +674,6 @@ def main() -> None:
             desc="secCode"
         ):
 
-        if sec_code != '29360':
-            continue
-
         list_doc_df = []
         for _, r in g.iterrows():
             date_str = str(r["date"])
