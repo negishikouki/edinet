@@ -641,7 +641,11 @@ def calc_eps_bps_cfps(
 def main() -> None:
     # listup.csv 読み込み
     listup_path = UPDATED_LISTUP_CSV if UPDATED_LISTUP_CSV.exists() else LISTUP_CSV
-    listup = pl.read_csv(listup_path)
+    # secCode can contain alphanumeric values (e.g. 138A0), so read it as string
+    listup = pl.read_csv(
+        listup_path,
+        schema_overrides={"secCode": pl.Utf8},
+    )
 
     required_cols = {"secCode", "date", "docID", "edinetCode", "docTypeCode"}
     missing = required_cols - set(listup.columns)
@@ -703,7 +707,7 @@ def main() -> None:
             desc="secCode"
         ):
 
-        list_doc_df = []
+        records = []
         for r in g.iter_rows(named=True):
             date_str = str(r["date"])
             date_dt = r["date_dt"]
@@ -724,13 +728,10 @@ def main() -> None:
 
             try:
                 doc_df = pl.read_csv(doc_path)
-                list_doc_df.append((doc_df, period_type))
             except Exception:
                 # 読めない場合もスキップ
                 continue
 
-        records = []
-        for doc_df, period_type in list_doc_df:
             eps, cfps, bps = calc_eps_bps_cfps(doc_df, period_type)
 
             records.append(
