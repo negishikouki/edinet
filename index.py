@@ -224,6 +224,7 @@ def write_csv_utf8sig(df: pl.DataFrame, path: Path) -> None:
 
 
 DOC_CSV_NULL_VALUES = ["", "-", "－", "―", "—"]
+SEC_CODE_FLOAT_PATTERN = r"^([0-9]+)\.0+$"
 
 _NUMERIC_NULL_TOKENS = {"", "-", "nan", "null", "none", "n/a"}
 _FULLWIDTH_NUMERIC_TRANS = str.maketrans(
@@ -247,6 +248,19 @@ _FULLWIDTH_NUMERIC_TRANS = str.maketrans(
         "—": "-",
     }
 )
+
+
+def normalize_sec_code_expr(expr: pl.Expr) -> pl.Expr:
+    sec_code = expr.cast(pl.Utf8).str.strip_chars()
+    return (
+        pl.when(
+            sec_code.is_null()
+            | (sec_code == "")
+            | sec_code.fill_null("").str.to_lowercase().is_in(["nan", "none"])
+        )
+        .then(None)
+        .otherwise(sec_code.str.replace(SEC_CODE_FLOAT_PATTERN, "$1"))
+    )
 
 
 def read_doc_csv(path: str | Path) -> pl.DataFrame:
@@ -738,8 +752,29 @@ def main() -> None:
     listup_path = UPDATED_LISTUP_CSV if UPDATED_LISTUP_CSV.exists() else LISTUP_CSV
     # secCode can contain alphanumeric values (e.g. 138A0), so read it as string
     listup = pl.read_csv(
-        listup_path,
-        schema_overrides={"secCode": pl.Utf8},
+        source=listup_path,
+        has_header=True,
+        columns=[
+            "date",
+            "docID",
+            "edinetCode",
+            "secCode",
+            "filerName",
+            "docTypeCode",
+            "submitDateTime"
+        ],
+        schema={
+            "date": pl.Utf8,
+            "docID": pl.Utf8,
+            "edinetCode": pl.Utf8,
+            "secCode": pl.Utf8,
+            "filerName": pl.Utf8,
+            "docTypeCode": pl.UInt32,
+            "submitDateTime": pl.Utf8
+        },
+        null_values=[""],
+        infer_schema=False,
+        infer_schema_length=0,
     )
 
     required_cols = {"secCode", "date", "docID", "edinetCode", "docTypeCode"}
@@ -748,10 +783,11 @@ def main() -> None:
         raise ValueError(f"listup.csv に必要な列がありません: {sorted(missing)}")
 
     listup = listup.with_columns(
+        normalize_sec_code_expr(pl.col("secCode")).alias("secCode"),
         pl.col("date")
         .cast(pl.Utf8)
         .str.strptime(pl.Datetime, strict=False)
-        .alias("date_dt")
+        .alias("date_dt"),
     )
 
     # edinetCodeで最新のsecCodeを取得し、全件に反映
@@ -885,5 +921,5 @@ def test_S10078N0():
     print(eps, cfps, bps)
 
 if __name__ == "__main__":
-    #main()
-    test_S10078N0()
+    main()
+    #test_S10078N0()
