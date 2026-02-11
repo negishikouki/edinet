@@ -223,21 +223,83 @@ def write_csv_utf8sig(df: pl.DataFrame, path: Path) -> None:
         f.write(csv_bytes)
 
 
+DOC_CSV_NULL_VALUES = ["", "-", "－", "―", "—"]
+
+_NUMERIC_NULL_TOKENS = {"", "-", "nan", "null", "none", "n/a"}
+_FULLWIDTH_NUMERIC_TRANS = str.maketrans(
+    {
+        "０": "0",
+        "１": "1",
+        "２": "2",
+        "３": "3",
+        "４": "4",
+        "５": "5",
+        "６": "6",
+        "７": "7",
+        "８": "8",
+        "９": "9",
+        "．": ".",
+        "，": ",",
+        "＋": "+",
+        "－": "-",
+        "−": "-",
+        "―": "-",
+        "—": "-",
+    }
+)
+
+
+def read_doc_csv(path: str | Path) -> pl.DataFrame:
+    """
+    EDINET doc CSV を文字列優先で読む。
+    「－」のような値が混在しても型推論エラーで落ちないようにする。
+    """
+    return pl.read_csv(
+        path,
+        infer_schema=False,
+        null_values=DOC_CSV_NULL_VALUES,
+    )
+
+
 def _to_float(x) -> Optional[float]:
     """
     値をfloatに変換。空・NaN・変換不能はNone。
     """
     if x is None:
         return None
-    try:
+
+    if isinstance(x, (int, float)):
         if isinstance(x, float) and x != x:
             return None
-        # 文字列のカンマ等を除去
-        if isinstance(x, str):
-            x = x.strip().replace(",", "")
-            if x == "":
-                return None
         return float(x)
+
+    s = str(x).strip()
+    if not s:
+        return None
+
+    s = s.translate(_FULLWIDTH_NUMERIC_TRANS)
+    s_lower = s.lower()
+    if s_lower in _NUMERIC_NULL_TOKENS:
+        return None
+
+    negative = False
+    if s.startswith(("△", "▲")):
+        negative = True
+        s = s[1:].strip()
+    elif s.startswith("(") and s.endswith(")"):
+        negative = True
+        s = s[1:-1].strip()
+
+    if s.endswith("%"):
+        s = s[:-1].strip()
+
+    s = s.replace(",", "").replace("_", "")
+    if not s or s.lower() in _NUMERIC_NULL_TOKENS:
+        return None
+
+    try:
+        value = float(s)
+        return -value if negative else value
     except Exception:
         return None
 
@@ -758,7 +820,7 @@ def main() -> None:
                 continue
 
             try:
-                doc_df = pl.read_csv(doc_path)
+                doc_df = read_doc_csv(doc_path)
             except Exception:
                 # 読めない場合もスキップ
                 continue
@@ -817,11 +879,11 @@ def main() -> None:
 
 
 def test_S10078N0():
-    doc_path = r"D:\source\repos\edinet\doc\jpcrp030000\S100VUG5.csv"
-    doc_df = pl.read_csv(doc_path)
+    doc_path = r"D:\source\repos\edinet\doc\jpcrp030000\S100VH9B.csv"
+    doc_df = read_doc_csv(doc_path)
     eps, cfps, bps = calc_eps_bps_cfps(doc_df, "annual")
     print(eps, cfps, bps)
 
 if __name__ == "__main__":
-    main()
-    #test_S10078N0()
+    #main()
+    test_S10078N0()
