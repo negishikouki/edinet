@@ -2,6 +2,7 @@ import requests
 from datetime import date, timedelta
 from enum import IntEnum
 from pathlib import Path
+import re
 import pandas as pd
 from tqdm import tqdm
 
@@ -34,11 +35,32 @@ LISTUP_COLUMNS = [
 ]
 LISTUP_PATH = Path("listup.csv")
 UPDATED_LISTUP_PATH = Path("updated_listup.csv")
+SEC_CODE_FLOAT_PATTERN = re.compile(r"^([0-9]+)\.0+$")
+
+
+def normalize_sec_code_text(value: object) -> str | None:
+    if pd.isna(value):
+        return None
+
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none"}:
+        return None
+
+    return SEC_CODE_FLOAT_PATTERN.sub(r"\1", text)
+
+
+def normalize_sec_code_column(df: pd.DataFrame) -> pd.DataFrame:
+    if "secCode" not in df.columns:
+        return df
+
+    normalized = df.copy()
+    normalized["secCode"] = normalized["secCode"].map(normalize_sec_code_text).astype("string")
+    return normalized
 
 
 def get_existing_listup() -> pd.DataFrame:
     if LISTUP_PATH.exists():
-        return pd.read_csv(LISTUP_PATH, low_memory=False)
+        return normalize_sec_code_column(pd.read_csv(LISTUP_PATH, low_memory=False))
     return pd.DataFrame(columns=LISTUP_COLUMNS)
 
 
@@ -82,7 +104,7 @@ def fetch_listup(start_date: date, end_date: date, existing_doc_ids: set[str]) -
                             "date": current.isoformat(),
                             "docID": doc_id,
                             "edinetCode": doc.get("edinetCode"),
-                            "secCode": doc.get("secCode"),
+                            "secCode": normalize_sec_code_text(doc.get("secCode")),
                             "filerName": doc.get("filerName"),
                             "docTypeCode": doc.get("docTypeCode"),
                             "submitDateTime": doc.get("submitDateTime"),
@@ -95,7 +117,7 @@ def fetch_listup(start_date: date, end_date: date, existing_doc_ids: set[str]) -
             current += timedelta(days=1)
             pbar.update(1)
 
-    return pd.DataFrame(listup, columns=LISTUP_COLUMNS)
+    return normalize_sec_code_column(pd.DataFrame(listup, columns=LISTUP_COLUMNS))
 
 
 def main() -> bool:
@@ -105,7 +127,7 @@ def main() -> bool:
 
     existing_doc_ids = set(existing_df.get("docID", pd.Series(dtype=str)).astype(str).dropna())
 
-    new_df = fetch_listup(start_date, end_date, existing_doc_ids)
+    new_df = normalize_sec_code_column(fetch_listup(start_date, end_date, existing_doc_ids))
 
     if new_df.empty:
         print("No new records found.")

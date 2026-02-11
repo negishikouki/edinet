@@ -1,5 +1,6 @@
 import pandas as pd
 from pathlib import Path
+import re
 from tqdm import tqdm
 
 INDEX_DIR = Path("index")
@@ -9,6 +10,27 @@ LISTUP_PATH = Path("listup.csv")
 UPDATED_LISTUP_PATH = Path("updated_listup.csv")
 SUMMARY_PATH = SUMMARY_DIR / "edinet_summary.csv"
 TARGET_COLS = ["EPS", "CFPS", "BPS"]
+SEC_CODE_FLOAT_PATTERN = re.compile(r"^([0-9]+)\.0+$")
+
+
+def normalize_sec_code_text(value: object) -> str | None:
+    if pd.isna(value):
+        return None
+
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none"}:
+        return None
+
+    return SEC_CODE_FLOAT_PATTERN.sub(r"\1", text)
+
+
+def normalize_sec_code_column(df: pd.DataFrame) -> pd.DataFrame:
+    if "secCode" not in df.columns:
+        return df
+
+    normalized = df.copy()
+    normalized["secCode"] = normalized["secCode"].map(normalize_sec_code_text).astype("string")
+    return normalized
 
 
 def load_filter_names(listup_df: pd.DataFrame) -> dict:
@@ -16,7 +38,7 @@ def load_filter_names(listup_df: pd.DataFrame) -> dict:
         return {}
 
     name_column = "filterName" if "filterName" in listup_df.columns else "filerName"
-    return listup_df.set_index("secCode")[name_column].to_dict()
+    return listup_df.dropna(subset=["secCode"]).set_index("secCode")[name_column].to_dict()
 
 
 def pick_latest_values(df: pd.DataFrame) -> tuple[dict, dict]:
@@ -45,12 +67,12 @@ def merge_listups(listup_path: Path, updated_path: Path) -> pd.DataFrame:
     base_columns: list[str] | None = None
 
     if listup_path.exists():
-        base_df = pd.read_csv(listup_path, low_memory=False)
+        base_df = normalize_sec_code_column(pd.read_csv(listup_path, low_memory=False))
         frames.append(base_df)
         base_columns = base_df.columns.tolist()
 
     if updated_path.exists():
-        updated_df = pd.read_csv(updated_path, low_memory=False)
+        updated_df = normalize_sec_code_column(pd.read_csv(updated_path, low_memory=False))
         frames.append(updated_df)
         if base_columns is None:
             base_columns = updated_df.columns.tolist()
@@ -65,7 +87,7 @@ def merge_listups(listup_path: Path, updated_path: Path) -> pd.DataFrame:
     if base_columns:
         merged = merged.reindex(columns=base_columns)
 
-    return merged
+    return normalize_sec_code_column(merged)
 
 
 def main():
@@ -73,8 +95,27 @@ def main():
     filter_names = load_filter_names(listup_df)
     records = []
 
-    for csv_path in tqdm(sorted(INDEX_DIR.glob("*.csv")), desc="Summarizing index", unit="file"):
-        sec_code = csv_path.stem
+    index_files_by_code: dict[str, Path] = {}
+    for csv_path in sorted(INDEX_DIR.glob("*.csv")):
+        sec_code = normalize_sec_code_text(csv_path.stem)
+        if sec_code is None:
+            continue
+
+        selected = index_files_by_code.get(sec_code)
+        if selected is None:
+            index_files_by_code[sec_code] = csv_path
+            continue
+
+        selected_is_canonical = selected.stem == sec_code
+        current_is_canonical = csv_path.stem == sec_code
+        if current_is_canonical and not selected_is_canonical:
+            index_files_by_code[sec_code] = csv_path
+
+    for sec_code, csv_path in tqdm(
+        sorted(index_files_by_code.items()),
+        desc="Summarizing index",
+        unit="file",
+    ):
         df = pd.read_csv(csv_path)
 
         if "date" not in df.columns:
