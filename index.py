@@ -547,6 +547,36 @@ def calc_eps_bps_cfps(
             prefer_current_year=True,
         )
 
+    if issued_shares is None:
+        # 'ユニットID' == 'shares' のなかで、element_idは不問として
+        # context_id=shares_context,
+        # period_type=period_type,
+        # データを取得して、
+        # 最大の値をissued_sharesに格納する
+        context_ids = shares_context.get(period_type, [])
+        if context_ids:
+            unit_col = "ユニットID" if "ユニットID" in doc_df.columns else doc_df.columns[6]
+            value_col = "値" if "値" in doc_df.columns else doc_df.columns[-1]
+            cid_col = doc_df.columns[2]
+
+            share_rows = doc_df.filter(
+                pl.col(unit_col)
+                .cast(pl.Utf8)
+                .str.strip_chars()
+                .str.to_lowercase()
+                .is_in(["shares"])
+                & pl.col(cid_col).cast(pl.Utf8).is_in(context_ids)
+            )
+
+            if not share_rows.is_empty():
+                share_values = [
+                    v
+                    for v in (_to_float(x) for x in share_rows.get_column(value_col).to_list())
+                    if v is not None
+                ]
+                if share_values:
+                    issued_shares = max(share_values)
+
     ttm_duration_contexts = {
         "annual": [
             [CID_CurrentYearDuration],
@@ -925,7 +955,7 @@ def main() -> None:
 
 
 def test_S10078N0():
-    doc_path = r"D:\source\repos\edinet\doc\jpcrp030000\S100VH9B.csv"
+    doc_path = r"D:\source\repos\edinet\doc\jpcrp030000\S100W5M9.csv"
     doc_df = read_doc_csv(doc_path)
     eps, cfps, bps = calc_eps_bps_cfps(doc_df, "annual")
     print(eps, cfps, bps)
