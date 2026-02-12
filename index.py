@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -743,6 +744,84 @@ def calc_eps_bps_cfps(
     return eps, cfps, bps
 
 
+def _process_sec_code(
+    sec_code: str,
+    listup: pl.DataFrame,
+    doc_index: Dict[str, Path],
+    out_root: Path,
+) -> None:
+    g = listup.filter(pl.col("secCode") == sec_code)
+
+    records = []
+    for r in g.iter_rows(named=True):
+        date_str = str(r["date"])
+        date_dt = r["date_dt"]
+        if date_dt is None:
+            date_dt = datetime.min
+        doc_id = str(r["docID"])
+        doc_type_code = str(r["docTypeCode"])
+        fname = f"{doc_id}.csv"
+
+        period_type = DOC_TYPE_PERIOD.get(doc_type_code)
+        if period_type is None:
+            continue
+
+        doc_path = doc_index.get(fname)
+        if doc_path is None:
+            continue
+
+        try:
+            doc_df = read_doc_csv(doc_path)
+        except Exception:
+            continue
+
+        eps, cfps, bps = calc_eps_bps_cfps(doc_df, period_type)
+        records.append(
+            {
+                "date": date_str,
+                "date_dt": date_dt,
+                "secCode": sec_code,
+                "EPS": eps,
+                "CFPS": cfps,
+                "BPS": bps,
+                "docTypeCode": doc_type_code,
+                "period_type": period_type,
+            }
+        )
+
+    if not records:
+        return
+
+    records.sort(key=lambda item: (item["date_dt"], item["date"]))
+
+    rows = []
+    for rec in records:
+        rows.append(
+            {
+                "date": rec["date"],
+                "secCode": rec["secCode"],
+                "EPS": rec["EPS"],
+                "CFPS": rec["CFPS"],
+                "BPS": rec["BPS"],  # BPSは時点値のためTTM化しない
+                "docTypeCode": rec["docTypeCode"],
+                "periodType": rec["period_type"],
+            }
+        )
+
+    out_df = pl.DataFrame(rows)
+
+    date_parsed = pl.col("date").cast(pl.Utf8).str.strptime(pl.Date, strict=False)
+    out_df = out_df.with_columns(
+        pl.when(date_parsed.is_not_null())
+        .then(date_parsed.dt.strftime("%Y-%m-%d"))
+        .otherwise(pl.col("date").cast(pl.Utf8))
+        .alias("date")
+    )
+
+    out_path = out_root / f"{sec_code}.csv"
+    write_csv_utf8sig(out_df, out_path)
+
+
 
 # =========================
 # メイン処理
@@ -830,86 +909,17 @@ def main() -> None:
         .unique(maintain_order=True)
         .to_list()
     )
-    for sec_code, g in tqdm(
-            ((code, listup.filter(pl.col("secCode") == code)) for code in sec_codes),
-            total=len(sec_codes),
-            desc="secCode"
-        ):
-
-        records = []
-        for r in g.iter_rows(named=True):
-            date_str = str(r["date"])
-            date_dt = r["date_dt"]
-            if date_dt is None:
-                date_dt = datetime.min
-            doc_id = str(r["docID"])
-            doc_type_code = str(r["docTypeCode"])
-            fname = f"{doc_id}.csv"
-
-            period_type = DOC_TYPE_PERIOD.get(doc_type_code)
-            if period_type is None:
-                continue
-
-            doc_path = doc_index.get(fname)
-            if doc_path is None:
-                # 見つからなければ continue
-                continue
-
+    with ThreadPoolExecutor() as executor:
+        future_to_code = {
+            executor.submit(_process_sec_code, str(sec_code), listup, doc_index, OUT_ROOT): str(sec_code)
+            for sec_code in sec_codes
+        }
+        for future in tqdm(as_completed(future_to_code), total=len(future_to_code), desc="secCode"):
+            sec_code = future_to_code[future]
             try:
-                doc_df = read_doc_csv(doc_path)
-            except Exception:
-                # 読めない場合もスキップ
-                continue
-
-            eps, cfps, bps = calc_eps_bps_cfps(doc_df, period_type)
-
-            records.append(
-                {
-                    "date": date_str,
-                    "date_dt": date_dt,
-                    "secCode": sec_code,
-                    "EPS": eps,
-                    "CFPS": cfps,
-                    "BPS": bps,
-                    "docTypeCode": doc_type_code,
-                    "period_type": period_type,
-                }
-            )
-
-        if not records:
-            # 1件も作れない場合は出力しない（必要なら空CSVを出すよう変更可）
-            continue
-
-        records.sort(key=lambda item: (item["date_dt"], item["date"]))
-
-        rows = []
-        for rec in records:
-            rows.append(
-                {
-                    "date": rec["date"],
-                    "secCode": rec["secCode"],
-                    "EPS": rec["EPS"],
-                    "CFPS": rec["CFPS"],
-                    "BPS": rec["BPS"],  # BPSは時点値のためTTM化しない
-                    "docTypeCode": rec["docTypeCode"],
-                    "periodType": rec["period_type"],
-                }
-            )
-
-        out_df = pl.DataFrame(rows)
-
-        # dateを可能なら整形（YYYY-MM-DD）
-        date_parsed = pl.col("date").cast(pl.Utf8).str.strptime(pl.Date, strict=False)
-        out_df = out_df.with_columns(
-            pl.when(date_parsed.is_not_null())
-            .then(date_parsed.dt.strftime("%Y-%m-%d"))
-            .otherwise(pl.col("date").cast(pl.Utf8))
-            .alias("date")
-        )
-
-        # secCodeごとにCSV出力
-        out_path = OUT_ROOT / f"{sec_code}.csv"
-        write_csv_utf8sig(out_df, out_path)
+                future.result()
+            except Exception as exc:
+                raise RuntimeError(f"secCode={sec_code} の処理でエラーが発生しました") from exc
 
     print("done.")
 
