@@ -24,10 +24,21 @@ EID_PROFIT_TO_OWNERS = "jppfs_cor:ProfitLossAttributableToOwnersOfParent"  # 当
 EID_AVG_SHARES = "jppfs_cor:AverageNumberOfShares"                         # 期中平均株式数
 EID_B_ELPS = "jpcrp_cor:BasicEarningsLossPerShareSummaryOfBusinessResults" # １株当たり当期純利益又は当期純損失（△）、経営指標等
 EID_D_ELPS = "jpcrp_cor:DilutedEarningsPerShareSummaryOfBusinessResults"   # 潜在株式調整後１株当たり当期純利益、経営指標等
+EIDS_PERIOD_PROFIT = [
+    "jpcrp_cor:ProfitLossAttributableToOwnersOfParentSummaryOfBusinessResults",
+    "jpcrp_cor:NetIncomeLossSummaryOfBusinessResults",
+    "jpcrp_cor:NetIncomeSummaryOfBusinessResults",
+    "jppfs_cor:ProfitLossAttributableToOwnersOfParent",
+    "jppfs_cor:ProfitLoss",
+    "jppfs_cor:NetIncomeLoss",
+    "jppfs_cor:NetIncome",
+    "jpigp_cor:ProfitLossIFRS",
+]
 
 # BPS
 EID_NET_ASSETS_PER_SHARE = "jpcrp_cor:NetAssetsPerShareSummaryOfBusinessResults" # １株当たり純資産額、経営指標等
 EID_NET_ASSETS = "jppfs_cor:NetAssets"                                     # 純資産合計
+EID_SHAREHOLDERS_EQUITY = "jppfs_cor:ShareholdersEquity"                   # 株主資本
 EID_SHARES_OUT = "jppfs_cor:NumberOfSharesOutstanding"                     # 期末発行済株式数
 
 # 営業CF（J-GAAP / IFRS / JMIS / US GAAP）
@@ -104,6 +115,8 @@ CID_Prior4InterimInstant = "Prior4InterimInstant" # 四期中間期末
 CID_Prior3InterimInstant = "Prior3InterimInstant" # 三期中間期末
 CID_Prior2InterimInstant = "Prior2InterimInstant" # 前々中間期末
 CID_Prior1InterimInstant = "Prior1InterimInstant" # 前中間期末
+CID_CurrentQuarterInstant = "CurrentQuarterInstant" # 当四半期会計期間末
+CID_Prior1QuarterInstant = "Prior1QuarterInstant" # 前年度同四半期会計期間末
 
 
 # -----------------------------
@@ -119,6 +132,8 @@ CID_Prior4InterimInstant_NonConsolidatedMember = "Prior4InterimInstant_NonConsol
 CID_Prior3InterimInstant_NonConsolidatedMember = "Prior3InterimInstant_NonConsolidatedMember" # 三期前期間末
 CID_Prior2InterimInstant_NonConsolidatedMember = "Prior2InterimInstant_NonConsolidatedMember" # 前々中間期末
 CID_Prior1InterimInstant_NonConsolidatedMember = "Prior1InterimInstant_NonConsolidatedMember" # 前中間期末
+CID_CurrentQuarterInstant_NonConsolidatedMember = "CurrentQuarterInstant_NonConsolidatedMember" # 当四半期会計期間末
+CID_Prior1QuarterInstant_NonConsolidatedMember = "Prior1QuarterInstant_NonConsolidatedMember" # 前年度同四半期会計期間末
 
 
 # -----------------------------
@@ -469,174 +484,281 @@ def pick_value_any(
     return None
 
 
+CURRENT_DURATION_CONTEXTS = {
+    "annual": [
+        CID_CurrentYearDuration,
+        CID_CurrentYearDuration_NonConsolidated,
+    ],
+    "semiannual": [
+        CID_InterimDuration,
+        CID_InterimDuration_NonConsolidatedMember,
+    ],
+    "quarterly": [
+        CID_CurrentYTDDuration,
+        CID_CurrentYTDDuration_NonConsolidated,
+    ],
+}
+
+CURRENT_INSTANT_CONTEXTS = {
+    "annual": [
+        CID_CurrentYearInstant,
+        CID_CurrentYearInstant_NonConsolidated,
+    ],
+    "semiannual": [
+        CID_InterimInstant,
+        CID_InterimInstant_NonConsolidatedMember,
+    ],
+    "quarterly": [
+        CID_CurrentQuarterInstant,
+        CID_CurrentQuarterInstant_NonConsolidatedMember,
+    ],
+}
+
+TTM_FORMULA_CONTEXTS = {
+    "annual": [
+        [(1, CID_CurrentYearDuration)],
+        [(1, CID_CurrentYearDuration_NonConsolidated)],
+    ],
+    "semiannual": [
+        [
+            (1, CID_InterimDuration),
+            (1, CID_Prior1YearDuration),
+            (-1, CID_Prior1InterimDuration),
+        ],
+        [
+            (1, CID_InterimDuration_NonConsolidatedMember),
+            (1, CID_Prior1YearDuration_NonConsolidated),
+            (-1, CID_Prior1InterimDuration_NonConsolidatedMember),
+        ],
+    ],
+    "quarterly": [
+        [
+            (1, CID_CurrentYTDDuration),
+            (1, CID_Prior1YearDuration),
+            (-1, CID_Prior1YTDDuration),
+        ],
+        [
+            (1, CID_CurrentYTDDuration_NonConsolidated),
+            (1, CID_Prior1YearDuration_NonConsolidated),
+            (-1, CID_Prior1YTDDuration_NonConsolidated),
+        ],
+    ],
+}
+
+_SHARE_ID_PATTERNS = [
+    "NumberOfSharesOutstanding",
+    "TotalNumberOfIssuedShares",
+]
+_SHARE_NAME_PATTERNS = [
+    "期末発行済株式数",
+    "発行済株式総数",
+]
+_SHARE_EXCLUDE_PATTERNS = [
+    "NumberOfSharesHeld",
+    "Treasury",
+    "保有",
+    "自己株",
+]
+
+
+def pick_formula_value_any(
+    df: pl.DataFrame,
+    element_ids: Iterable[str] | str,
+    formulas: Iterable[Iterable[tuple[int, str]]],
+    prefer_consolidated: bool = True,
+) -> Optional[float]:
+    """
+    要素ID候補を順に試し、指定した符号付きコンテキスト式で合成した値を返す。
+    """
+    if isinstance(element_ids, (str, bytes)):
+        element_ids = [element_ids]
+
+    for element_id in element_ids:
+        for formula in formulas:
+            total = 0.0
+            found = False
+            for sign, context_id in formula:
+                value = pick_value(
+                    df,
+                    element_id,
+                    context_id=context_id,
+                    prefer_consolidated=prefer_consolidated,
+                    prefer_current_year=False,
+                )
+                if value is None:
+                    total = 0.0
+                    found = False
+                    break
+                found = True
+                total += sign * value
+            if found:
+                return total
+    return None
+
+
+def pick_current_share_count(doc_df: pl.DataFrame, period_type: str) -> Optional[float]:
+    """
+    現在の提出期間に対応する株式数を返す。
+    まず機械可読な要素IDを優先し、なければ shares ユニットの行から
+    「発行済株式総数 / 期末発行済株式数」に相当する候補のみを拾う。
+    """
+    context_ids = CURRENT_INSTANT_CONTEXTS.get(period_type, [])
+    if not context_ids:
+        return None
+
+    shares = pick_value(
+        doc_df,
+        EID_SHARES_OUT,
+        context_id=context_ids,
+        prefer_consolidated=True,
+        prefer_current_year=False,
+    )
+    if shares is not None:
+        return shares
+
+    shares = pick_value(
+        doc_df,
+        EID_TNOIS,
+        context_id=context_ids,
+        prefer_consolidated=True,
+        prefer_current_year=False,
+    )
+    if shares is not None:
+        return shares
+
+    if doc_df.is_empty():
+        return None
+
+    eid_col = doc_df.columns[0]
+    item_col = doc_df.columns[1]
+    cid_col = doc_df.columns[2]
+    unit_col = "ユニットID" if "ユニットID" in doc_df.columns else doc_df.columns[6]
+    value_col = "値" if "値" in doc_df.columns else doc_df.columns[-1]
+
+    for context_id in context_ids:
+        share_rows = doc_df.filter(
+            pl.col(unit_col)
+            .cast(pl.Utf8)
+            .str.strip_chars()
+            .str.to_lowercase()
+            .is_in(["shares"])
+            & (pl.col(cid_col).cast(pl.Utf8) == context_id)
+        )
+        if share_rows.is_empty():
+            continue
+
+        preferred_rows = share_rows.filter(
+            pl.col(eid_col)
+            .cast(pl.Utf8)
+            .str.contains("|".join(_SHARE_ID_PATTERNS))
+            | pl.col(item_col).cast(pl.Utf8).str.contains("|".join(_SHARE_NAME_PATTERNS))
+        )
+        if preferred_rows.is_empty():
+            preferred_rows = share_rows.filter(
+                ~pl.col(eid_col)
+                .cast(pl.Utf8)
+                .str.contains("|".join(_SHARE_EXCLUDE_PATTERNS))
+                & ~pl.col(item_col).cast(pl.Utf8).str.contains("|".join(_SHARE_EXCLUDE_PATTERNS))
+            )
+        if preferred_rows.is_empty():
+            continue
+
+        values = [
+            value
+            for value in (_to_float(x) for x in preferred_rows.get_column(value_col).to_list())
+            if value is not None and value > 0.0
+        ]
+        if values:
+            return max(values)
+
+    return None
+
+
+def estimate_period_shares(
+    doc_df: pl.DataFrame,
+    period_type: str,
+    profit: Optional[float],
+    eps: Optional[float],
+    current_share_count: Optional[float],
+) -> Optional[float]:
+    """
+    期間損益の1株当たり指標に使う株式数を返す。
+    EPS と利益の両方がある場合は加重平均株式数を逆算し、それが難しいときは
+    直接取得できる期中平均株式数、最後に期末株式数へフォールバックする。
+    """
+    if profit is not None and eps not in (None, 0.0):
+        estimated = profit / eps
+        if estimated > 0.0:
+            return estimated
+
+    average_shares = pick_value(
+        doc_df,
+        EID_AVG_SHARES,
+        context_id=CURRENT_DURATION_CONTEXTS.get(period_type),
+        prefer_consolidated=True,
+        prefer_current_year=False,
+    )
+    if average_shares is not None and average_shares > 0.0:
+        return average_shares
+
+    return current_share_count
+
+
 def calc_eps_bps_cfps(
     doc_df: pl.DataFrame, period_type: str
 ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     """
     doc CSV DataFrame から EPS, CFPS, BPS を計算して返す。
+    - EPS: TTMベース
+    - CFPS: 営業CF(TTM) / 平均株式数ベース
+    - BPS: 期末時点ベース
     欠損があれば None。
     """
+    ttm_formulas = TTM_FORMULA_CONTEXTS.get(period_type)
+    current_duration_contexts = CURRENT_DURATION_CONTEXTS.get(period_type)
+    current_instant_contexts = CURRENT_INSTANT_CONTEXTS.get(period_type)
+    if ttm_formulas is None or current_duration_contexts is None or current_instant_contexts is None:
+        return None, None, None
 
-    # -----------------------------
-    # 発行済株式数
-    # -----------------------------
-    shares_context = {
-        "annual": [
-            CID_CurrentYearInstant,
-            CID_Prior1YearInstant,
-            CID_Prior2YearInstant,
-            CID_Prior3YearInstant,
-            CID_Prior4YearInstant,
-            CID_CurrentYearInstant_NonConsolidated,
-            CID_Prior1YearInstant_NonConsolidated,
-            CID_Prior2YearInstant_NonConsolidated,
-            CID_Prior3YearInstant_NonConsolidated,
-            CID_Prior4YearInstant_NonConsolidated,
-        ],
-        "semiannual": [
-            CID_InterimInstant,
-            CID_Prior1InterimInstant,
-            CID_Prior2InterimInstant,
-            CID_Prior3InterimInstant,
-            CID_Prior4InterimInstant,
-            CID_InterimInstant_NonConsolidatedMember,
-            CID_Prior1InterimInstant_NonConsolidatedMember,
-            CID_Prior2InterimInstant_NonConsolidatedMember,
-            CID_Prior3InterimInstant_NonConsolidatedMember,
-            CID_Prior4InterimInstant_NonConsolidatedMember,
-        ],
-        "quarterly": [
-            CID_CurrentYearInstant,
-            CID_InterimInstant,
-            CID_Prior1YearInstant,
-            CID_Prior1InterimInstant,
-            CID_Prior2YearInstant,
-            CID_Prior2InterimInstant,
-            CID_Prior3YearInstant,
-            CID_Prior3InterimInstant,
-            CID_Prior4YearInstant,
-            CID_Prior4InterimInstant,
-            CID_CurrentYearInstant_NonConsolidated,
-            CID_InterimInstant_NonConsolidatedMember,
-            CID_Prior1YearInstant_NonConsolidated,
-            CID_Prior1InterimInstant_NonConsolidatedMember,
-            CID_Prior2YearInstant_NonConsolidated,
-            CID_Prior2InterimInstant_NonConsolidatedMember,
-            CID_Prior3YearInstant_NonConsolidated,
-            CID_Prior3InterimInstant_NonConsolidatedMember,
-            CID_Prior4YearInstant_NonConsolidated,
-            CID_Prior4InterimInstant_NonConsolidatedMember,
-        ],
-    }
-
-    issued_shares = pick_value(
-        doc_df,
-        EID_TNOIS,
-        context_id=shares_context,
-        period_type=period_type,
-        prefer_consolidated=True,
-        prefer_current_year=True,
-    )
-
-    if issued_shares is None:
-        issued_shares = pick_value(
-            doc_df,
-            EID_SHARES_OUT,
-            context_id=None,
-            prefer_consolidated=True,
-            prefer_current_year=True,
-        )
-
-    if issued_shares is None:
-        # 'ユニットID' == 'shares' のなかで、element_idは不問として
-        # context_id=shares_context,
-        # period_type=period_type,
-        # データを取得して、
-        # 最大の値をissued_sharesに格納する
-        context_ids = shares_context.get(period_type, [])
-        if context_ids:
-            unit_col = "ユニットID" if "ユニットID" in doc_df.columns else doc_df.columns[6]
-            value_col = "値" if "値" in doc_df.columns else doc_df.columns[-1]
-            cid_col = doc_df.columns[2]
-
-            share_rows = doc_df.filter(
-                pl.col(unit_col)
-                .cast(pl.Utf8)
-                .str.strip_chars()
-                .str.to_lowercase()
-                .is_in(["shares"])
-                & pl.col(cid_col).cast(pl.Utf8).is_in(context_ids)
-            )
-
-            if not share_rows.is_empty():
-                share_values = [
-                    v
-                    for v in (_to_float(x) for x in share_rows.get_column(value_col).to_list())
-                    if v is not None
-                ]
-                if share_values:
-                    issued_shares = max(share_values)
-
-    ttm_duration_contexts = {
-        "annual": [
-            [CID_CurrentYearDuration],
-            [CID_CurrentYearDuration_NonConsolidated],
-        ],
-        "semiannual": [
-            [CID_InterimDuration, CID_Prior1InterimDuration],
-            [CID_InterimDuration_NonConsolidatedMember, CID_Prior1InterimDuration_NonConsolidatedMember],
-        ],
-        "quarterly": [
-            [
-                CID_CurrentYearDuration,
-                CID_Prior1YearDuration,
-                CID_Prior2YearDuration,
-                CID_Prior3YearDuration,
-            ],
-            [
-                CID_CurrentYearDuration_NonConsolidated,
-                CID_Prior1YearDuration_NonConsolidated,
-                CID_Prior2YearDuration_NonConsolidated,
-                CID_Prior3YearDuration_NonConsolidated,
-            ],
-        ],
-    }
+    current_share_count = pick_current_share_count(doc_df, period_type)
 
     # -----------------------------
     # EPS
     # -----------------------------
-    eps = pick_value(
+    profit = pick_formula_value_any(
         doc_df,
-        EID_B_ELPS,
-        context_id=ttm_duration_contexts,
-        period_type=period_type,
-        aggregate="sum",
+        EIDS_PERIOD_PROFIT,
+        ttm_formulas,
         prefer_consolidated=True,
-        prefer_current_year=True,
     )
 
+    eps = pick_formula_value_any(
+        doc_df,
+        EID_B_ELPS,
+        ttm_formulas,
+        prefer_consolidated=True,
+    )
     if eps is None:
-        eps = pick_value(
+        eps = pick_formula_value_any(
             doc_df,
             EID_D_ELPS,
-            context_id=ttm_duration_contexts,
-            period_type=period_type,
-            aggregate="sum",
+            ttm_formulas,
             prefer_consolidated=True,
-            prefer_current_year=True,
         )
 
+    period_shares = estimate_period_shares(
+        doc_df,
+        period_type,
+        profit=profit,
+        eps=eps,
+        current_share_count=current_share_count,
+    )
     if eps is None:
-        profit = pick_value(
-            doc_df,
-            EID_PROFIT_TO_OWNERS,
-            context_id=ttm_duration_contexts,
-            period_type=period_type,
-            aggregate="sum",
-            prefer_consolidated=True,
-            prefer_current_year=True,
+        eps = (
+            profit / period_shares
+            if (profit is not None and period_shares not in (None, 0.0))
+            else None
         )
-        eps = (profit / issued_shares) if (profit is not None and issued_shares not in (None, 0.0)) else None
 
     # -----------------------------
     # BPS
@@ -644,132 +766,38 @@ def calc_eps_bps_cfps(
     bps = pick_value(
         doc_df,
         EID_NET_ASSETS_PER_SHARE,
-        context_id=[
-            CID_CurrentYearInstant,
-            CID_Prior4YearInstant,
-            CID_Prior3YearInstant,
-            CID_Prior2YearInstant,
-            CID_Prior1YearInstant,
-            CID_CurrentYearInstant_NonConsolidated,
-            CID_Prior4YearInstant_NonConsolidated,
-            CID_Prior3YearInstant_NonConsolidated,
-            CID_Prior2YearInstant_NonConsolidated,
-            CID_Prior1YearInstant_NonConsolidated,
-        ],
+        context_id=current_instant_contexts,
         prefer_consolidated=True,
-        prefer_current_year=True,
+        prefer_current_year=False,
     )
-
     if bps is None:
-        net_assets = pick_value(
+        net_assets = pick_value_any(
             doc_df,
-            EID_NET_ASSETS,
-            context_id=None,
+            [EID_SHAREHOLDERS_EQUITY, EID_NET_ASSETS],
+            context_id=current_instant_contexts,
             prefer_consolidated=True,
-            prefer_current_year=True,
+            prefer_current_year=False,
         )
-        bps = (net_assets / issued_shares) if (net_assets is not None and issued_shares not in (None, 0.0)) else None
+        bps = (
+            net_assets / current_share_count
+            if (net_assets is not None and current_share_count not in (None, 0.0))
+            else None
+        )
 
-    
     # -----------------------------
-    # CFPS（FCFEベース：厳密版）
+    # CFPS（営業CFベース、TTM）
     # -----------------------------
-    # 営業CF
-    ocf = pick_value_any(
+    ocf = pick_formula_value_any(
         doc_df,
         EIDS_OCF,
-        context_id=ttm_duration_contexts,
-        period_type=period_type,
-        aggregate="sum",
+        ttm_formulas,
         prefer_consolidated=True,
-        prefer_current_year=True,
     )
-
-    # CAPEX（有形＋無形）
-    capex = pick_value_any(
-        doc_df,
-        EIDS_CAPEX_COMBINED,
-        context_id=None,
-        prefer_consolidated=True,
-        prefer_current_year=True,
-    )
-
-    if capex is None:
-        capex = _sum_optional([
-            pick_value_any(
-                doc_df,
-                EIDS_PPE_PURCHASE,
-                context_id=None,
-                prefer_consolidated=True,
-                prefer_current_year=True,
-            ),
-            pick_value_any(
-                doc_df,
-                EIDS_INTANGIBLE_PURCHASE,
-                context_id=None,
-                prefer_consolidated=True,
-                prefer_current_year=True,
-            ),
-        ])
-
-    # 純借入額
-    st_delta = pick_value_any(
-        doc_df,
-        EIDS_NET_INCREASE_DECREASE_ST_LOANS,
-        context_id=None,
-        prefer_consolidated=True,
-        prefer_current_year=True,
-    )
-
-    lt_proceeds = pick_value_any(
-        doc_df,
-        EIDS_PROCEEDS_LT_LOANS,
-        context_id=None,
-        prefer_consolidated=True,
-        prefer_current_year=True,
-    )
-
-    lt_repayment = pick_value_any(
-        doc_df,
-        EIDS_REPAYMENT_LT_LOANS,
-        context_id=None,
-        prefer_consolidated=True,
-        prefer_current_year=True,
-    )
-
-    # 長期借入返済は必ずマイナスであることを要求
-    if lt_repayment is not None and lt_repayment > 0:
-        raise ValueError(
-            f"Invalid sign: RepaymentOfLongTermLoansPayableFinCF must be negative, got {lt_repayment}"
-        )
-
-    net_borrowing = _sum_optional([
-        st_delta,
-        lt_proceeds,
-        lt_repayment,  # 既にマイナスで入っている前提
-    ])
-
-    fcfe = (
-        ocf - capex + net_borrowing
-        if (ocf is not None and capex is not None and net_borrowing is not None)
+    cfps = (
+        ocf / period_shares
+        if (ocf is not None and period_shares not in (None, 0.0))
         else None
     )
-
-    cfps = (fcfe / issued_shares) if (fcfe is not None and issued_shares not in (None, 0.0)) else None
-
-    if cfps is None:
-        icf = pick_value_any(
-            doc_df,
-            EIDS_ICF,
-            context_id=ttm_duration_contexts,
-            period_type=period_type,
-            aggregate="sum",
-            prefer_consolidated=True,
-            prefer_current_year=True,
-        )
-
-        fcff = _sum_optional([ocf, icf])
-        cfps = (fcff / issued_shares) if (fcff is not None and issued_shares not in (None, 0.0)) else None
 
     return eps, cfps, bps
 
@@ -952,6 +980,34 @@ def main() -> None:
                 raise RuntimeError(f"secCode={sec_code} の処理でエラーが発生しました") from exc
 
     print("done.")
+
+
+def _assert_close(actual: Optional[float], expected: Optional[float], tol: float = 1e-6) -> None:
+    if expected is None:
+        assert actual is None
+        return
+    assert actual is not None
+    assert abs(actual - expected) <= tol, f"expected={expected}, actual={actual}"
+
+
+def test_calc_eps_bps_cfps_samples() -> None:
+    annual_df = read_doc_csv(r"D:\source\repos\edinet\doc\jpcrp030000\S100W5M9.csv")
+    annual_eps, annual_cfps, annual_bps = calc_eps_bps_cfps(annual_df, "annual")
+    _assert_close(annual_eps, 205.77, tol=1e-2)
+    _assert_close(annual_cfps, 153.10758238373884, tol=1e-6)
+    _assert_close(annual_bps, 2352.84, tol=1e-2)
+
+    semi_df = read_doc_csv(r"D:\source\repos\edinet\doc\jpcrp050000\S100PWK9.csv")
+    semi_eps, semi_cfps, semi_bps = calc_eps_bps_cfps(semi_df, "semiannual")
+    _assert_close(semi_eps, 15.29, tol=1e-2)
+    _assert_close(semi_cfps, 96.52590911256132, tol=1e-6)
+    _assert_close(semi_bps, 193.49, tol=1e-2)
+
+    quarterly_df = read_doc_csv(r"D:\source\repos\edinet\doc\jpcrp040300\S1006IDD.csv")
+    quarterly_eps, quarterly_cfps, quarterly_bps = calc_eps_bps_cfps(quarterly_df, "quarterly")
+    _assert_close(quarterly_eps, 215.70, tol=1e-2)
+    _assert_close(quarterly_cfps, 499.9340911636241, tol=1e-6)
+    _assert_close(quarterly_bps, None)
 
 
 def test_S10078N0():
