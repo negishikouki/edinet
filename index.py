@@ -704,6 +704,34 @@ def estimate_period_shares(
     return current_share_count
 
 
+def estimate_cfps_shares(
+    doc_df: pl.DataFrame,
+    period_type: str,
+    current_share_count: Optional[float],
+    period_shares: Optional[float],
+) -> Optional[float]:
+    """
+    CFPSの分母に使う株式数を返す。
+
+    CFPSは営業CFを株式数で割る指標のため、まず期中平均株式数を優先し、
+    取得できない場合に限り EPS 由来の推計株式数 / 期末株式数へフォールバックする。
+    """
+    average_shares = pick_value(
+        doc_df,
+        EID_AVG_SHARES,
+        context_id=CURRENT_DURATION_CONTEXTS.get(period_type),
+        prefer_consolidated=True,
+        prefer_current_year=False,
+    )
+    if average_shares is not None and average_shares > 0.0:
+        return average_shares
+
+    if period_shares is not None and period_shares > 0.0:
+        return period_shares
+
+    return current_share_count
+
+
 def calc_eps_bps_cfps(
     doc_df: pl.DataFrame, period_type: str
 ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
@@ -793,11 +821,13 @@ def calc_eps_bps_cfps(
         ttm_formulas,
         prefer_consolidated=True,
     )
-    cfps = (
-        ocf / period_shares
-        if (ocf is not None and period_shares not in (None, 0.0))
-        else None
+    cfps_shares = estimate_cfps_shares(
+        doc_df,
+        period_type,
+        current_share_count=current_share_count,
+        period_shares=period_shares,
     )
+    cfps = ocf / cfps_shares if (ocf is not None and cfps_shares not in (None, 0.0)) else None
 
     return eps, cfps, bps
 
@@ -1008,6 +1038,38 @@ def test_calc_eps_bps_cfps_samples() -> None:
     _assert_close(quarterly_eps, 215.70, tol=1e-2)
     _assert_close(quarterly_cfps, 499.9340911636241, tol=1e-6)
     _assert_close(quarterly_bps, None)
+
+
+def test_cfps_prefers_average_shares_over_eps_inferred_shares() -> None:
+    # EPSの逆算株式数が歪んでいても、CFPSではAverageNumberOfSharesを優先すること
+    df = pl.DataFrame(
+        {
+            "要素ID": [
+                "jppfs_cor:ProfitLossAttributableToOwnersOfParent",
+                "jpcrp_cor:BasicEarningsLossPerShareSummaryOfBusinessResults",
+                "jppfs_cor:AverageNumberOfShares",
+                "jppfs_cor:NumberOfSharesOutstanding",
+                "jppfs_cor:NetCashProvidedByUsedInOperatingActivities",
+            ],
+            "項目名": ["" for _ in range(5)],
+            "コンテキストID": [
+                CID_CurrentYearDuration,
+                CID_CurrentYearDuration,
+                CID_CurrentYearDuration,
+                CID_CurrentYearInstant,
+                CID_CurrentYearDuration,
+            ],
+            "相対年度": ["当期" for _ in range(5)],
+            "連結・個別": ["連結" for _ in range(5)],
+            "期間・時点": ["期間", "期間", "期間", "時点", "期間"],
+            "ユニットID": ["JPY", "JPY", "shares", "shares", "JPY"],
+            "値": [900.0, 1.0, 100.0, 120.0, 10_000.0],
+        }
+    )
+
+    eps, cfps, _ = calc_eps_bps_cfps(df, "annual")
+    _assert_close(eps, 1.0, tol=1e-9)
+    _assert_close(cfps, 100.0, tol=1e-9)
 
 
 def test_S10078N0():
