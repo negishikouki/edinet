@@ -689,7 +689,9 @@ def calc_eps_bps_cfps(
     capex = pick_value_any(
         doc_df,
         EIDS_CAPEX_COMBINED,
-        context_id=None,
+        context_id=ttm_duration_contexts,
+        period_type=period_type,
+        aggregate="sum",
         prefer_consolidated=True,
         prefer_current_year=True,
     )
@@ -699,14 +701,18 @@ def calc_eps_bps_cfps(
             pick_value_any(
                 doc_df,
                 EIDS_PPE_PURCHASE,
-                context_id=None,
+                context_id=ttm_duration_contexts,
+                period_type=period_type,
+                aggregate="sum",
                 prefer_consolidated=True,
                 prefer_current_year=True,
             ),
             pick_value_any(
                 doc_df,
                 EIDS_INTANGIBLE_PURCHASE,
-                context_id=None,
+                context_id=ttm_duration_contexts,
+                period_type=period_type,
+                aggregate="sum",
                 prefer_consolidated=True,
                 prefer_current_year=True,
             ),
@@ -716,7 +722,9 @@ def calc_eps_bps_cfps(
     st_delta = pick_value_any(
         doc_df,
         EIDS_NET_INCREASE_DECREASE_ST_LOANS,
-        context_id=None,
+        context_id=ttm_duration_contexts,
+        period_type=period_type,
+        aggregate="sum",
         prefer_consolidated=True,
         prefer_current_year=True,
     )
@@ -724,7 +732,9 @@ def calc_eps_bps_cfps(
     lt_proceeds = pick_value_any(
         doc_df,
         EIDS_PROCEEDS_LT_LOANS,
-        context_id=None,
+        context_id=ttm_duration_contexts,
+        period_type=period_type,
+        aggregate="sum",
         prefer_consolidated=True,
         prefer_current_year=True,
     )
@@ -732,16 +742,16 @@ def calc_eps_bps_cfps(
     lt_repayment = pick_value_any(
         doc_df,
         EIDS_REPAYMENT_LT_LOANS,
-        context_id=None,
+        context_id=ttm_duration_contexts,
+        period_type=period_type,
+        aggregate="sum",
         prefer_consolidated=True,
         prefer_current_year=True,
     )
 
-    # 長期借入返済は必ずマイナスであることを要求
-    if lt_repayment is not None and lt_repayment > 0:
-        raise ValueError(
-            f"Invalid sign: RepaymentOfLongTermLoansPayableFinCF must be negative, got {lt_repayment}"
-        )
+    # 長期借入返済は実質的にキャッシュアウトのため、正値で来ても負値へ正規化する
+    if lt_repayment is not None:
+        lt_repayment = -abs(lt_repayment)
 
     net_borrowing = _sum_optional([
         st_delta,
