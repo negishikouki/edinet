@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -939,7 +939,7 @@ def main() -> None:
         .unique(maintain_order=True)
         .to_list()
     )
-    with ThreadPoolExecutor() as executor:
+    with ProcessPoolExecutor() as executor:
         future_to_code = {
             executor.submit(_process_sec_code, str(sec_code), listup, doc_index, OUT_ROOT): str(sec_code)
             for sec_code in sec_codes
