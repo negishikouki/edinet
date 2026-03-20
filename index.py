@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import zipfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -15,7 +16,7 @@ from tqdm import tqdm
 # =========================
 LISTUP_CSV = Path("./listup.csv")
 UPDATED_LISTUP_CSV = Path("./updated_listup.csv")
-DOC_ROOT = Path("./doc")      # docID.csv を再帰探索するルート
+DOC_ZIP = Path("./doc.zip")
 OUT_ROOT = Path("./index")    # secCode別の出力先
 
 # EDINET（jppfs_cor）最小セット
@@ -175,20 +176,23 @@ DOC_TYPE_PERIOD = {
 # =========================
 # ユーティリティ
 # =========================
-def build_doc_index(doc_root: Path) -> Dict[str, Path]:
+def build_doc_index(doc_zip: Path) -> Dict[str, str]:
     """
-    ./doc 以下（サブディレクトリ含む）にある *.csv を再帰走査して、
-    ファイル名（例: S100XXXX.csv） -> フルパス の辞書を作る。
+    ./doc.zip にある *.csv を走査して、
+    ファイル名（例: S100XXXX.csv） -> zip内部パス の辞書を作る。
     同名が複数ある場合は先に見つかったものを採用（必要なら変更可）。
     """
-    index: Dict[str, Path] = {}
-    if not doc_root.exists():
+    index: Dict[str, str] = {}
+    if not doc_zip.exists():
         return index
 
-    for p in doc_root.rglob("*.csv"):
-        name = p.name
-        if name not in index:
-            index[name] = p
+    with zipfile.ZipFile(doc_zip, mode="r") as zf:
+        for member in zf.namelist():
+            if not member.endswith(".csv"):
+                continue
+            name = Path(member).name
+            if name not in index:
+                index[name] = member
     return index
 
 
@@ -274,6 +278,16 @@ def read_doc_csv(path: str | Path) -> pl.DataFrame:
         infer_schema=False,
         null_values=DOC_CSV_NULL_VALUES,
     )
+
+
+def read_doc_csv_from_zip(zip_path: Path, member_path: str) -> pl.DataFrame:
+    with zipfile.ZipFile(zip_path, mode="r") as zf:
+        with zf.open(member_path) as f:
+            return pl.read_csv(
+                f,
+                infer_schema=False,
+                null_values=DOC_CSV_NULL_VALUES,
+            )
 
 
 def _to_float(x) -> Optional[float]:
@@ -777,7 +791,8 @@ def calc_eps_bps_cfps(
 def _process_sec_code(
     sec_code: str,
     listup: pl.DataFrame,
-    doc_index: Dict[str, Path],
+    doc_index: Dict[str, str],
+    doc_zip_path: Path,
     out_root: Path,
 ) -> None:
     g = listup.filter(pl.col("secCode") == sec_code)
@@ -796,12 +811,12 @@ def _process_sec_code(
         if period_type is None:
             continue
 
-        doc_path = doc_index.get(fname)
-        if doc_path is None:
+        member_path = doc_index.get(fname)
+        if member_path is None:
             continue
 
         try:
-            doc_df = read_doc_csv(doc_path)
+            doc_df = read_doc_csv_from_zip(doc_zip_path, member_path)
         except Exception:
             continue
 
@@ -926,8 +941,8 @@ def main() -> None:
     # dateが壊れている行は最後に回す
     listup = listup.sort(["secCode", "date_dt", "date"], nulls_last=True)
 
-    # docディレクトリを走査してファイル名->パスのindexを作る（高速化）
-    doc_index = build_doc_index(DOC_ROOT)
+    # doc.zip を走査してファイル名->zip内部パスのindexを作る（高速化）
+    doc_index = build_doc_index(DOC_ZIP)
 
     # 出力先作成
     OUT_ROOT.mkdir(parents=True, exist_ok=True)
@@ -941,7 +956,7 @@ def main() -> None:
     )
     with ProcessPoolExecutor() as executor:
         future_to_code = {
-            executor.submit(_process_sec_code, str(sec_code), listup, doc_index, OUT_ROOT): str(sec_code)
+            executor.submit(_process_sec_code, str(sec_code), listup, doc_index, DOC_ZIP, OUT_ROOT): str(sec_code)
             for sec_code in sec_codes
         }
         for future in tqdm(as_completed(future_to_code), total=len(future_to_code), desc="secCode"):

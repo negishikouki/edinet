@@ -17,6 +17,7 @@ API_KEY = ""
 BASE_URL = "https://api.edinet-fsa.go.jp/api/v2/documents"
 LISTUP_PATH = Path("listup.csv")
 UPDATED_LISTUP_PATH = Path("updated_listup.csv")
+DOC_ZIP_PATH = Path("doc.zip")
 
 doc_prefix_by_frequency = {
     "annual": {"prefix": ["jpcrp030000"], "role": "通期（12か月）"},
@@ -78,14 +79,19 @@ def fetch_all_prefix_dfs(docID: str, prefixes: list[str]) -> dict[str, pd.DataFr
     return dfs
 
 
-def build_fetched_docid_set(out_root: Path) -> set[str]:
+def build_fetched_docid_set(zip_path: Path) -> set[str]:
     """
-    doc/配下に存在する CSV ファイルの docID をまとめて取得する
+    doc.zip 配下に存在する CSV ファイルの docID をまとめて取得する
     """
-    if not out_root.exists():
+    if not zip_path.exists():
         return set()
 
-    return {csv_path.stem for csv_path in out_root.glob("*/*.csv")}
+    with zipfile.ZipFile(zip_path, mode="r") as zf:
+        return {
+            Path(name).stem
+            for name in zf.namelist()
+            if name.endswith(".csv")
+        }
 
 
 def docid_already_fetched(docID: str, fetched_docids: set[str]) -> bool:
@@ -100,31 +106,31 @@ def docid_already_fetched(docID: str, fetched_docids: set[str]) -> bool:
 # -----------------------------
 def main():
     listup_path = UPDATED_LISTUP_PATH if UPDATED_LISTUP_PATH.exists() else LISTUP_PATH
-    out_root = Path("./doc")
-    out_root.mkdir(parents=True, exist_ok=True)
-    fetched_docids = build_fetched_docid_set(out_root)
+    fetched_docids = build_fetched_docid_set(DOC_ZIP_PATH)
 
     listup_df = pd.read_csv(listup_path)
     docIDs = listup_df["docID"].dropna().astype(str).tolist()
 
-    for docID in tqdm(docIDs, desc="Fetching per docID"):
+    with zipfile.ZipFile(
+        DOC_ZIP_PATH, mode="a", compression=zipfile.ZIP_DEFLATED
+    ) as doc_zip:
+        for docID in tqdm(docIDs, desc="Fetching per docID"):
 
-        # 既存チェック
-        if docid_already_fetched(docID, fetched_docids):
-            tqdm.write(f"[SKIP] {docID}: already exists")
-            continue
+            # 既存チェック
+            if docid_already_fetched(docID, fetched_docids):
+                tqdm.write(f"[SKIP] {docID}: already exists")
+                continue
 
-        try:
-            dfs_by_prefix = fetch_all_prefix_dfs(docID, all_prefixes)
+            try:
+                dfs_by_prefix = fetch_all_prefix_dfs(docID, all_prefixes)
 
-            for prefix, df in dfs_by_prefix.items():
-                out_dir = out_root / prefix
-                out_dir.mkdir(parents=True, exist_ok=True)
-                df.to_csv(out_dir / f"{docID}.csv", index=False)
-                fetched_docids.add(docID)
+                for prefix, df in dfs_by_prefix.items():
+                    archive_name = f"{prefix}/{docID}.csv"
+                    doc_zip.writestr(archive_name, df.to_csv(index=False))
+                    fetched_docids.add(docID)
 
-        except Exception as e:
-            tqdm.write(f"[WARN] {docID}: {e}")
+            except Exception as e:
+                tqdm.write(f"[WARN] {docID}: {e}")
 
 
 if __name__ == "__main__":
