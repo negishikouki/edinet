@@ -719,7 +719,7 @@ def calc_eps_bps_cfps(
 
         capex = _sum_optional([ppe_purchase, intangible_purchase])
 
-    # 純借入額
+    # 短期借入純増減（ネット値）はそのまま利用
     st_delta = pick_value_any(
         doc_df,
         EIDS_NET_INCREASE_DECREASE_ST_LOANS,
@@ -728,6 +728,7 @@ def calc_eps_bps_cfps(
         prefer_current_year=True,
     )
 
+    # 長期借入の調達額（総額）は絶対値化して加算
     lt_proceeds = pick_value_any(
         doc_df,
         EIDS_PROCEEDS_LT_LOANS,
@@ -735,7 +736,10 @@ def calc_eps_bps_cfps(
         prefer_consolidated=True,
         prefer_current_year=True,
     )
+    if lt_proceeds is not None:
+        lt_proceeds = abs(lt_proceeds)
 
+    # 長期借入の返済額（総額）は絶対値化して控除
     lt_repayment = pick_value_any(
         doc_df,
         EIDS_REPAYMENT_LT_LOANS,
@@ -743,17 +747,13 @@ def calc_eps_bps_cfps(
         prefer_consolidated=True,
         prefer_current_year=True,
     )
-
-    # 長期借入返済は必ずマイナスであることを要求
-    if lt_repayment is not None and lt_repayment > 0:
-        raise ValueError(
-            f"Invalid sign: RepaymentOfLongTermLoansPayableFinCF must be negative, got {lt_repayment}"
-        )
+    if lt_repayment is not None:
+        lt_repayment = abs(lt_repayment)
 
     net_borrowing = _sum_optional([
         st_delta,
         lt_proceeds,
-        lt_repayment,  # 既にマイナスで入っている前提
+        -lt_repayment if lt_repayment is not None else None,
     ])
 
     fcfe = (
