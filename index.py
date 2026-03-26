@@ -694,23 +694,30 @@ def calc_eps_bps_cfps(
         prefer_current_year=True,
     )
 
-    if capex is None:
-        capex = _sum_optional([
-            pick_value_any(
-                doc_df,
-                EIDS_PPE_PURCHASE,
-                context_id=None,
-                prefer_consolidated=True,
-                prefer_current_year=True,
-            ),
-            pick_value_any(
-                doc_df,
-                EIDS_INTANGIBLE_PURCHASE,
-                context_id=None,
-                prefer_consolidated=True,
-                prefer_current_year=True,
-            ),
-        ])
+    if capex is not None:
+        capex = abs(capex)
+    else:
+        ppe_purchase = pick_value_any(
+            doc_df,
+            EIDS_PPE_PURCHASE,
+            context_id=None,
+            prefer_consolidated=True,
+            prefer_current_year=True,
+        )
+        intangible_purchase = pick_value_any(
+            doc_df,
+            EIDS_INTANGIBLE_PURCHASE,
+            context_id=None,
+            prefer_consolidated=True,
+            prefer_current_year=True,
+        )
+
+        if ppe_purchase is not None:
+            ppe_purchase = abs(ppe_purchase)
+        if intangible_purchase is not None:
+            intangible_purchase = abs(intangible_purchase)
+
+        capex = _sum_optional([ppe_purchase, intangible_purchase])
 
     # 純借入額
     st_delta = pick_value_any(
