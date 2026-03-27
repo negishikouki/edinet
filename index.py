@@ -15,20 +15,22 @@ from tqdm import tqdm
 # =========================
 LISTUP_CSV = Path("./listup.csv")
 UPDATED_LISTUP_CSV = Path("./updated_listup.csv")
-DOC_ROOT = Path("./doc")      # docID.csv を再帰探索するルート
-OUT_ROOT = Path("./index")    # secCode別の出力先
+DOC_ROOT = Path("./doc")  # docID.csv を再帰探索するルート
+OUT_ROOT = Path("./index")  # secCode別の出力先
 
 # EDINET（jppfs_cor）最小セット
 # EPS
-EID_PROFIT_TO_OWNERS = "jppfs_cor:ProfitLossAttributableToOwnersOfParent"  # 当期純利益（親会社株主帰属）
-EID_AVG_SHARES = "jppfs_cor:AverageNumberOfShares"                         # 期中平均株式数
-EID_B_ELPS = "jpcrp_cor:BasicEarningsLossPerShareSummaryOfBusinessResults" # １株当たり当期純利益又は当期純損失（△）、経営指標等
-EID_D_ELPS = "jpcrp_cor:DilutedEarningsPerShareSummaryOfBusinessResults"   # 潜在株式調整後１株当たり当期純利益、経営指標等
+EID_PROFIT_TO_OWNERS = (
+    "jppfs_cor:ProfitLossAttributableToOwnersOfParent"  # 当期純利益（親会社株主帰属）
+)
+EID_AVG_SHARES = "jppfs_cor:AverageNumberOfShares"  # 期中平均株式数
+EID_B_ELPS = "jpcrp_cor:BasicEarningsLossPerShareSummaryOfBusinessResults"  # １株当たり当期純利益又は当期純損失（△）、経営指標等
+EID_D_ELPS = "jpcrp_cor:DilutedEarningsPerShareSummaryOfBusinessResults"  # 潜在株式調整後１株当たり当期純利益、経営指標等
 
 # BPS
-EID_NET_ASSETS_PER_SHARE = "jpcrp_cor:NetAssetsPerShareSummaryOfBusinessResults" # １株当たり純資産額、経営指標等
-EID_NET_ASSETS = "jppfs_cor:NetAssets"                                     # 純資産合計
-EID_SHARES_OUT = "jppfs_cor:NumberOfSharesOutstanding"                     # 期末発行済株式数
+EID_NET_ASSETS_PER_SHARE = "jpcrp_cor:NetAssetsPerShareSummaryOfBusinessResults"  # １株当たり純資産額、経営指標等
+EID_NET_ASSETS = "jppfs_cor:NetAssets"  # 純資産合計
+EID_SHARES_OUT = "jppfs_cor:NumberOfSharesOutstanding"  # 期末発行済株式数
 
 # 営業CF（J-GAAP / IFRS / JMIS / US GAAP）
 EIDS_OCF = [
@@ -84,41 +86,65 @@ EID_TNOIS = "jpcrp_cor:TotalNumberOfIssuedSharesSummaryOfBusinessResults"  # 発
 
 # コンテキストID（期間）
 CID_CurrentYTDDuration = "CurrentYTDDuration"  # 当四半期累計期間
-CID_Prior1YTDDuration  = "Prior1YTDDuration"   # 前年度同四半期累計期間
+CID_Prior1YTDDuration = "Prior1YTDDuration"  # 前年度同四半期累計期間
 CID_Prior1YearDuration = "Prior1YearDuration"  # 前期
-CID_CurrentYTDDuration_NonConsolidated = "CurrentYTDDuration_NonConsolidated" # 当四半期累計期間
-CID_Prior1YTDDuration_NonConsolidated  = "Prior1YTDDuration_NonConsolidated"   # 前年度同四半期累計期間
+CID_CurrentYTDDuration_NonConsolidated = (
+    "CurrentYTDDuration_NonConsolidated"  # 当四半期累計期間
+)
+CID_Prior1YTDDuration_NonConsolidated = (
+    "Prior1YTDDuration_NonConsolidated"  # 前年度同四半期累計期間
+)
 CID_Prior1YearDuration_NonConsolidated = "Prior1YearDuration_NonConsolidated"  # 前期
 
 
 # -----------------------------
 # Instant（時点）
 # -----------------------------
-CID_CurrentYearInstant = "CurrentYearInstant"   # 当期末
-CID_Prior4YearInstant  = "Prior4YearInstant"    # 四期前時点
-CID_Prior3YearInstant  = "Prior3YearInstant"    # 三期前時点
-CID_Prior2YearInstant  = "Prior2YearInstant"    # 前々期末
-CID_Prior1YearInstant  = "Prior1YearInstant"    # 前期末
-CID_InterimInstant = "InterimInstant" # 当中間期末
-CID_Prior4InterimInstant = "Prior4InterimInstant" # 四期中間期末
-CID_Prior3InterimInstant = "Prior3InterimInstant" # 三期中間期末
-CID_Prior2InterimInstant = "Prior2InterimInstant" # 前々中間期末
-CID_Prior1InterimInstant = "Prior1InterimInstant" # 前中間期末
+CID_CurrentYearInstant = "CurrentYearInstant"  # 当期末
+CID_Prior4YearInstant = "Prior4YearInstant"  # 四期前時点
+CID_Prior3YearInstant = "Prior3YearInstant"  # 三期前時点
+CID_Prior2YearInstant = "Prior2YearInstant"  # 前々期末
+CID_Prior1YearInstant = "Prior1YearInstant"  # 前期末
+CID_InterimInstant = "InterimInstant"  # 当中間期末
+CID_Prior4InterimInstant = "Prior4InterimInstant"  # 四期中間期末
+CID_Prior3InterimInstant = "Prior3InterimInstant"  # 三期中間期末
+CID_Prior2InterimInstant = "Prior2InterimInstant"  # 前々中間期末
+CID_Prior1InterimInstant = "Prior1InterimInstant"  # 前中間期末
 
 
 # -----------------------------
 # Instant（時点・非連結）
 # -----------------------------
-CID_CurrentYearInstant_NonConsolidatedMember = "CurrentYearInstant_NonConsolidatedMember"   # 当期末
-CID_Prior4YearInstant_NonConsolidatedMember  = "Prior4YearInstant_NonConsolidatedMember"    # 四期前時点
-CID_Prior3YearInstant_NonConsolidatedMember  = "Prior3YearInstant_NonConsolidatedMember"    # 三期前時点
-CID_Prior2YearInstant_NonConsolidatedMember  = "Prior2YearInstant_NonConsolidatedMember"    # 前々期末
-CID_Prior1YearInstant_NonConsolidatedMember  = "Prior1YearInstant_NonConsolidatedMember"    # 前期末
-CID_InterimInstant_NonConsolidatedMember = "InterimInstant_NonConsolidatedMember" # 当中間期末
-CID_Prior4InterimInstant_NonConsolidatedMember = "Prior4InterimInstant_NonConsolidatedMember" # 四期前期間末末
-CID_Prior3InterimInstant_NonConsolidatedMember = "Prior3InterimInstant_NonConsolidatedMember" # 三期前期間末
-CID_Prior2InterimInstant_NonConsolidatedMember = "Prior2InterimInstant_NonConsolidatedMember" # 前々中間期末
-CID_Prior1InterimInstant_NonConsolidatedMember = "Prior1InterimInstant_NonConsolidatedMember" # 前中間期末
+CID_CurrentYearInstant_NonConsolidatedMember = (
+    "CurrentYearInstant_NonConsolidatedMember"  # 当期末
+)
+CID_Prior4YearInstant_NonConsolidatedMember = (
+    "Prior4YearInstant_NonConsolidatedMember"  # 四期前時点
+)
+CID_Prior3YearInstant_NonConsolidatedMember = (
+    "Prior3YearInstant_NonConsolidatedMember"  # 三期前時点
+)
+CID_Prior2YearInstant_NonConsolidatedMember = (
+    "Prior2YearInstant_NonConsolidatedMember"  # 前々期末
+)
+CID_Prior1YearInstant_NonConsolidatedMember = (
+    "Prior1YearInstant_NonConsolidatedMember"  # 前期末
+)
+CID_InterimInstant_NonConsolidatedMember = (
+    "InterimInstant_NonConsolidatedMember"  # 当中間期末
+)
+CID_Prior4InterimInstant_NonConsolidatedMember = (
+    "Prior4InterimInstant_NonConsolidatedMember"  # 四期前期間末末
+)
+CID_Prior3InterimInstant_NonConsolidatedMember = (
+    "Prior3InterimInstant_NonConsolidatedMember"  # 三期前期間末
+)
+CID_Prior2InterimInstant_NonConsolidatedMember = (
+    "Prior2InterimInstant_NonConsolidatedMember"  # 前々中間期末
+)
+CID_Prior1InterimInstant_NonConsolidatedMember = (
+    "Prior1InterimInstant_NonConsolidatedMember"  # 前中間期末
+)
 
 
 # -----------------------------
@@ -130,33 +156,63 @@ CID_Prior2YearDuration = "Prior2YearDuration"  # 前々期期間
 CID_Prior1YearDuration = "Prior1YearDuration"  # 前期期間
 CID_CurrentYearDuration = "CurrentYearDuration"  # 当期期間
 CID_InterimDuration = "InterimDuration"  # 当中間期末
-CID_Prior4InterimDuration = "Prior4InterimDuration" # 四期中間期
-CID_Prior3InterimDuration = "Prior3InterimDuration" # 三期中間期
-CID_Prior2InterimDuration = "Prior2InterimDuration" # 前々中間期
-CID_Prior1InterimDuration = "Prior1InterimDuration"	# 前中間期
+CID_Prior4InterimDuration = "Prior4InterimDuration"  # 四期中間期
+CID_Prior3InterimDuration = "Prior3InterimDuration"  # 三期中間期
+CID_Prior2InterimDuration = "Prior2InterimDuration"  # 前々中間期
+CID_Prior1InterimDuration = "Prior1InterimDuration"  # 前中間期
 
 
 # -----------------------------
 # Duration（期間・非連結）
 # -----------------------------
-CID_Prior4YearDuration_NonConsolidated = "Prior4YearDuration_NonConsolidatedMember"  # 四期前期間（非連結）
-CID_Prior3YearDuration_NonConsolidated = "Prior3YearDuration_NonConsolidatedMember"  # 三期前期間（非連結）
-CID_Prior2YearDuration_NonConsolidated = "Prior2YearDuration_NonConsolidatedMember"  # 前々期期間（非連結）
-CID_Prior1YearDuration_NonConsolidated = "Prior1YearDuration_NonConsolidatedMember"  # 前期期間（非連結）
-CID_CurrentYearDuration_NonConsolidated = "CurrentYearDuration_NonConsolidatedMember"  # 当期期間（非連結）
-CID_InterimDuration_NonConsolidatedMember = "InterimDuration_NonConsolidatedMember"  # 当中間期末
-CID_Prior4InterimDuration_NonConsolidatedMember = "Prior4InterimDuration_NonConsolidatedMember" # 四期中間期
-CID_Prior3InterimDuration_NonConsolidatedMember = "Prior3InterimDuration_NonConsolidatedMember" # 三期中間期
-CID_Prior2InterimDuration_NonConsolidatedMember = "Prior2InterimDuration_NonConsolidatedMember" # 前々中間期
-CID_Prior1InterimDuration_NonConsolidatedMember = "Prior1InterimDuration_NonConsolidatedMember"	# 前中間期
+CID_Prior4YearDuration_NonConsolidated = (
+    "Prior4YearDuration_NonConsolidatedMember"  # 四期前期間（非連結）
+)
+CID_Prior3YearDuration_NonConsolidated = (
+    "Prior3YearDuration_NonConsolidatedMember"  # 三期前期間（非連結）
+)
+CID_Prior2YearDuration_NonConsolidated = (
+    "Prior2YearDuration_NonConsolidatedMember"  # 前々期期間（非連結）
+)
+CID_Prior1YearDuration_NonConsolidated = (
+    "Prior1YearDuration_NonConsolidatedMember"  # 前期期間（非連結）
+)
+CID_CurrentYearDuration_NonConsolidated = (
+    "CurrentYearDuration_NonConsolidatedMember"  # 当期期間（非連結）
+)
+CID_InterimDuration_NonConsolidatedMember = (
+    "InterimDuration_NonConsolidatedMember"  # 当中間期末
+)
+CID_Prior4InterimDuration_NonConsolidatedMember = (
+    "Prior4InterimDuration_NonConsolidatedMember"  # 四期中間期
+)
+CID_Prior3InterimDuration_NonConsolidatedMember = (
+    "Prior3InterimDuration_NonConsolidatedMember"  # 三期中間期
+)
+CID_Prior2InterimDuration_NonConsolidatedMember = (
+    "Prior2InterimDuration_NonConsolidatedMember"  # 前々中間期
+)
+CID_Prior1InterimDuration_NonConsolidatedMember = (
+    "Prior1InterimDuration_NonConsolidatedMember"  # 前中間期
+)
 
 
 # コンテキストID（時点・個別）
-CID_Prior4YearInstant_NonConsolidated = "Prior4YearInstant_NonConsolidatedMember"  # 四期前時点（個別）
-CID_Prior3YearInstant_NonConsolidated = "Prior3YearInstant_NonConsolidatedMember"  # 三期前時点（個別）
-CID_Prior2YearInstant_NonConsolidated = "Prior2YearInstant_NonConsolidatedMember"  # 前々期末（個別）
-CID_Prior1YearInstant_NonConsolidated = "Prior1YearInstant_NonConsolidatedMember"  # 前期末（個別）
-CID_CurrentYearInstant_NonConsolidated = "CurrentYearInstant_NonConsolidatedMember"  # 当期末（個別）
+CID_Prior4YearInstant_NonConsolidated = (
+    "Prior4YearInstant_NonConsolidatedMember"  # 四期前時点（個別）
+)
+CID_Prior3YearInstant_NonConsolidated = (
+    "Prior3YearInstant_NonConsolidatedMember"  # 三期前時点（個別）
+)
+CID_Prior2YearInstant_NonConsolidated = (
+    "Prior2YearInstant_NonConsolidatedMember"  # 前々期末（個別）
+)
+CID_Prior1YearInstant_NonConsolidated = (
+    "Prior1YearInstant_NonConsolidatedMember"  # 前期末（個別）
+)
+CID_CurrentYearInstant_NonConsolidated = (
+    "CurrentYearInstant_NonConsolidatedMember"  # 当期末（個別）
+)
 
 
 # =========================
@@ -364,16 +420,12 @@ def pick_value(
             return None
 
         if prefer_consolidated and "連結・個別" in sub_df.columns:
-            con = sub_df.filter(
-                pl.col("連結・個別").cast(pl.Utf8).str.contains("連結")
-            )
+            con = sub_df.filter(pl.col("連結・個別").cast(pl.Utf8).str.contains("連結"))
             if not con.is_empty():
                 sub_df = con
 
         if prefer_current_year and "相対年度" in sub_df.columns:
-            cur = sub_df.filter(
-                pl.col("相対年度").cast(pl.Utf8).is_in(["0", "当期"])
-            )
+            cur = sub_df.filter(pl.col("相対年度").cast(pl.Utf8).is_in(["0", "当期"]))
             if not cur.is_empty():
                 sub_df = cur
 
@@ -396,8 +448,7 @@ def pick_value(
         values: list[float] = []
         for cid in contexts:
             sub_df = df.filter(
-                (pl.col(eid_col).cast(pl.Utf8) == element_id)
-                & (cid_col_expr == cid)
+                (pl.col(eid_col).cast(pl.Utf8) == element_id) & (cid_col_expr == cid)
             )
             value = pick_single_value(sub_df)
             if value is None:
@@ -406,7 +457,11 @@ def pick_value(
         return sum(values) if values else None
 
     if aggregate == "sum" and context_id:
-        if isinstance(context_id, list) and context_id and isinstance(context_id[0], list):
+        if (
+            isinstance(context_id, list)
+            and context_id
+            and isinstance(context_id[0], list)
+        ):
             for option in context_id:
                 value = sum_contexts(option)
                 if value is not None:
@@ -420,7 +475,9 @@ def pick_value(
             return sum_contexts([context_id])
 
     if context_id:
-        if isinstance(context_id, Iterable) and not isinstance(context_id, (str, bytes)):
+        if isinstance(context_id, Iterable) and not isinstance(
+            context_id, (str, bytes)
+        ):
             for cid in context_id:
                 sub = df.filter(
                     (pl.col(eid_col).cast(pl.Utf8) == element_id)
@@ -555,7 +612,9 @@ def calc_eps_bps_cfps(
         # 最大の値をissued_sharesに格納する
         context_ids = shares_context.get(period_type, [])
         if context_ids:
-            unit_col = "ユニットID" if "ユニットID" in doc_df.columns else doc_df.columns[6]
+            unit_col = (
+                "ユニットID" if "ユニットID" in doc_df.columns else doc_df.columns[6]
+            )
             value_col = "値" if "値" in doc_df.columns else doc_df.columns[-1]
             cid_col = doc_df.columns[2]
 
@@ -571,7 +630,9 @@ def calc_eps_bps_cfps(
             if not share_rows.is_empty():
                 share_values = [
                     v
-                    for v in (_to_float(x) for x in share_rows.get_column(value_col).to_list())
+                    for v in (
+                        _to_float(x) for x in share_rows.get_column(value_col).to_list()
+                    )
                     if v is not None
                 ]
                 if share_values:
@@ -584,7 +645,10 @@ def calc_eps_bps_cfps(
         ],
         "semiannual": [
             [CID_InterimDuration, CID_Prior1InterimDuration],
-            [CID_InterimDuration_NonConsolidatedMember, CID_Prior1InterimDuration_NonConsolidatedMember],
+            [
+                CID_InterimDuration_NonConsolidatedMember,
+                CID_Prior1InterimDuration_NonConsolidatedMember,
+            ],
         ],
         "quarterly": [
             [
@@ -636,7 +700,11 @@ def calc_eps_bps_cfps(
             prefer_consolidated=True,
             prefer_current_year=True,
         )
-        eps = (profit / issued_shares) if (profit is not None and issued_shares not in (None, 0.0)) else None
+        eps = (
+            (profit / issued_shares)
+            if (profit is not None and issued_shares not in (None, 0.0))
+            else None
+        )
 
     # -----------------------------
     # BPS
@@ -668,11 +736,14 @@ def calc_eps_bps_cfps(
             prefer_consolidated=True,
             prefer_current_year=True,
         )
-        bps = (net_assets / issued_shares) if (net_assets is not None and issued_shares not in (None, 0.0)) else None
+        bps = (
+            (net_assets / issued_shares)
+            if (net_assets is not None and issued_shares not in (None, 0.0))
+            else None
+        )
 
-    
     # -----------------------------
-    # CFPS（FCFEベース：厳密版）
+    # CFPS（Operating + Investing Cash Flow）
     # -----------------------------
     # 営業CF
     ocf = pick_value_any(
@@ -695,22 +766,27 @@ def calc_eps_bps_cfps(
     )
 
     if capex is None:
-        capex = _sum_optional([
-            pick_value_any(
-                doc_df,
-                EIDS_PPE_PURCHASE,
-                context_id=None,
-                prefer_consolidated=True,
-                prefer_current_year=True,
-            ),
-            pick_value_any(
-                doc_df,
-                EIDS_INTANGIBLE_PURCHASE,
-                context_id=None,
-                prefer_consolidated=True,
-                prefer_current_year=True,
-            ),
-        ])
+        capex = _sum_optional(
+            [
+                pick_value_any(
+                    doc_df,
+                    EIDS_PPE_PURCHASE,
+                    context_id=None,
+                    prefer_consolidated=True,
+                    prefer_current_year=True,
+                ),
+                pick_value_any(
+                    doc_df,
+                    EIDS_INTANGIBLE_PURCHASE,
+                    context_id=None,
+                    prefer_consolidated=True,
+                    prefer_current_year=True,
+                ),
+            ]
+        )
+
+    if capex is not None:
+        capex = abs(capex)
 
     # 純借入額
     st_delta = pick_value_any(
@@ -743,19 +819,28 @@ def calc_eps_bps_cfps(
             f"Invalid sign: RepaymentOfLongTermLoansPayableFinCF must be negative, got {lt_repayment}"
         )
 
-    net_borrowing = _sum_optional([
-        st_delta,
-        lt_proceeds,
-        lt_repayment,  # 既にマイナスで入っている前提
-    ])
+    net_borrowing = _sum_optional(
+        [
+            st_delta,
+            lt_proceeds,
+            lt_repayment,  # 既にマイナスで入っている前提
+        ]
+    )
 
-    fcfe = (
-        ocf - capex + net_borrowing
+    oicf = (
+        # FCFE = ocf - capex + net_borrowingであるが、
+        # oicf = ocf + capex + net_borrowingとする
+        # キャッシュフローの大きさを指標化するため
+        ocf + capex + net_borrowing
         if (ocf is not None and capex is not None and net_borrowing is not None)
         else None
     )
 
-    cfps = (fcfe / issued_shares) if (fcfe is not None and issued_shares not in (None, 0.0)) else None
+    cfps = (
+        (oicf / issued_shares)
+        if (oicf is not None and issued_shares not in (None, 0.0))
+        else None
+    )
 
     if cfps is None:
         icf = pick_value_any(
@@ -769,7 +854,11 @@ def calc_eps_bps_cfps(
         )
 
         fcff = _sum_optional([ocf, icf])
-        cfps = (fcff / issued_shares) if (fcff is not None and issued_shares not in (None, 0.0)) else None
+        cfps = (
+            (fcff / issued_shares)
+            if (fcff is not None and issued_shares not in (None, 0.0))
+            else None
+        )
 
     return eps, cfps, bps
 
@@ -852,7 +941,6 @@ def _process_sec_code(
     write_csv_utf8sig(out_df, out_path)
 
 
-
 # =========================
 # メイン処理
 # =========================
@@ -870,7 +958,7 @@ def main() -> None:
             "secCode",
             "filerName",
             "docTypeCode",
-            "submitDateTime"
+            "submitDateTime",
         ],
         schema={
             "date": pl.Utf8,
@@ -879,7 +967,7 @@ def main() -> None:
             "secCode": pl.Utf8,
             "filerName": pl.Utf8,
             "docTypeCode": pl.UInt32,
-            "submitDateTime": pl.Utf8
+            "submitDateTime": pl.Utf8,
         },
         null_values=[""],
         infer_schema=False,
@@ -900,9 +988,8 @@ def main() -> None:
     )
 
     # edinetCodeで最新のsecCodeを取得し、全件に反映
-    non_null_sec = (
-        listup.filter(pl.col("secCode").is_not_null())
-        .sort(["date_dt", "date"], nulls_last=True)
+    non_null_sec = listup.filter(pl.col("secCode").is_not_null()).sort(
+        ["date_dt", "date"], nulls_last=True
     )
     latest_sec_code_df = non_null_sec.group_by("edinetCode", maintain_order=True).agg(
         pl.col("secCode").last().alias("latest_secCode")
@@ -934,22 +1021,25 @@ def main() -> None:
 
     # secCodeごとに処理
     sec_codes = (
-        listup.get_column("secCode")
-        .drop_nulls()
-        .unique(maintain_order=True)
-        .to_list()
+        listup.get_column("secCode").drop_nulls().unique(maintain_order=True).to_list()
     )
     with ProcessPoolExecutor() as executor:
         future_to_code = {
-            executor.submit(_process_sec_code, str(sec_code), listup, doc_index, OUT_ROOT): str(sec_code)
+            executor.submit(
+                _process_sec_code, str(sec_code), listup, doc_index, OUT_ROOT
+            ): str(sec_code)
             for sec_code in sec_codes
         }
-        for future in tqdm(as_completed(future_to_code), total=len(future_to_code), desc="secCode"):
+        for future in tqdm(
+            as_completed(future_to_code), total=len(future_to_code), desc="secCode"
+        ):
             sec_code = future_to_code[future]
             try:
                 future.result()
             except Exception as exc:
-                raise RuntimeError(f"secCode={sec_code} の処理でエラーが発生しました") from exc
+                raise RuntimeError(
+                    f"secCode={sec_code} の処理でエラーが発生しました"
+                ) from exc
 
     print("done.")
 
@@ -960,6 +1050,7 @@ def test_S10078N0():
     eps, cfps, bps = calc_eps_bps_cfps(doc_df, "annual")
     print(eps, cfps, bps)
 
+
 if __name__ == "__main__":
     main()
-    #test_S10078N0()
+    # test_S10078N0()
