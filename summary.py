@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 from pathlib import Path
 import re
@@ -31,6 +32,16 @@ def normalize_sec_code_column(df: pd.DataFrame) -> pd.DataFrame:
     normalized = df.copy()
     normalized["secCode"] = normalized["secCode"].map(normalize_sec_code_text).astype("string")
     return normalized
+
+
+def write_dataframe_atomic(df: pd.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        df.to_csv(temp_path, index=False)
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def load_filter_names(listup_df: pd.DataFrame) -> dict:
@@ -148,10 +159,10 @@ def main():
             "date_BPS",
         ],
     )
-    summary_df.to_csv(SUMMARY_PATH, index=False)
+    write_dataframe_atomic(summary_df, SUMMARY_PATH)
 
     if UPDATED_LISTUP_PATH.exists():
-        listup_df.to_csv(LISTUP_PATH, index=False)
+        write_dataframe_atomic(listup_df, LISTUP_PATH)
         UPDATED_LISTUP_PATH.unlink()
 
 

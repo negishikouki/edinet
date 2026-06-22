@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import os
+from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +19,24 @@ LISTUP_CSV = Path("./listup.csv")
 UPDATED_LISTUP_CSV = Path("./updated_listup.csv")
 DOC_ROOT = Path("./doc")  # docID.csv を再帰探索するルート
 OUT_ROOT = Path("./index")  # secCode別の出力先
+LISTUP_COLUMNS = [
+    "date",
+    "docID",
+    "edinetCode",
+    "secCode",
+    "filerName",
+    "docTypeCode",
+    "submitDateTime",
+]
+LISTUP_SCHEMA = {
+    "date": pl.Utf8,
+    "docID": pl.Utf8,
+    "edinetCode": pl.Utf8,
+    "secCode": pl.Utf8,
+    "filerName": pl.Utf8,
+    "docTypeCode": pl.UInt32,
+    "submitDateTime": pl.Utf8,
+}
 
 # EDINET（jppfs_cor）最小セット
 # EPS
@@ -248,7 +268,7 @@ def build_doc_index(doc_root: Path) -> Dict[str, Path]:
     return index
 
 
-def write_csv_utf8sig(df: pl.DataFrame, path: Path) -> None:
+def _write_csv_utf8sig_direct(df: pl.DataFrame, path: Path) -> None:
     try:
         df.write_csv(path, include_bom=True)
         return
@@ -278,6 +298,16 @@ def write_csv_utf8sig(df: pl.DataFrame, path: Path) -> None:
     with open(path, "wb") as f:
         f.write(b"\xef\xbb\xbf")
         f.write(csv_bytes)
+
+
+def write_csv_utf8sig(df: pl.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        _write_csv_utf8sig_direct(df, temp_path)
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 DOC_CSV_NULL_VALUES = ["", "-", "－", "―", "—"]
@@ -318,6 +348,135 @@ def normalize_sec_code_expr(expr: pl.Expr) -> pl.Expr:
         .then(None)
         .otherwise(sec_code.str.replace(SEC_CODE_FLOAT_PATTERN, "$1"))
     )
+
+
+def read_listup_csv(path: Path) -> pl.DataFrame:
+    return pl.read_csv(
+        source=path,
+        has_header=True,
+        columns=LISTUP_COLUMNS,
+        schema=LISTUP_SCHEMA,
+        null_values=[""],
+        infer_schema=False,
+        infer_schema_length=0,
+    )
+
+
+def load_merged_listup(
+    listup_path: Path,
+    updated_listup_path: Path,
+) -> tuple[pl.DataFrame, pl.DataFrame | None]:
+    if not listup_path.exists() and not updated_listup_path.exists():
+        raise FileNotFoundError(
+            f"{listup_path} と {updated_listup_path} のどちらも存在しません"
+        )
+
+    base = read_listup_csv(listup_path) if listup_path.exists() else None
+    updated = (
+        read_listup_csv(updated_listup_path)
+        if updated_listup_path.exists()
+        else None
+    )
+    frames = [frame for frame in (base, updated) if frame is not None]
+    merged = pl.concat(frames, how="vertical_relaxed")
+    if "docID" in merged.columns:
+        merged = merged.unique(subset=["docID"], keep="last", maintain_order=True)
+    return merged, updated
+
+
+def prepare_listup(listup: pl.DataFrame) -> pl.DataFrame:
+    required_cols = {"secCode", "date", "docID", "edinetCode", "docTypeCode"}
+    missing = required_cols - set(listup.columns)
+    if missing:
+        raise ValueError(f"listup.csv に必要な列がありません: {sorted(missing)}")
+
+    listup = listup.with_columns(
+        normalize_sec_code_expr(pl.col("secCode")).alias("secCode"),
+        pl.col("date")
+        .cast(pl.Utf8)
+        .str.strptime(pl.Datetime, strict=False)
+        .alias("date_dt"),
+    )
+
+    non_null_sec = listup.filter(pl.col("secCode").is_not_null()).sort(
+        ["date_dt", "date"], nulls_last=True
+    )
+    latest_sec_code_df = non_null_sec.group_by(
+        "edinetCode", maintain_order=True
+    ).agg(pl.col("secCode").last().alias("latest_secCode"))
+    return (
+        listup.join(latest_sec_code_df, on="edinetCode", how="left")
+        .with_columns(
+            pl.coalesce(
+                [
+                    pl.col("latest_secCode"),
+                    pl.col("secCode"),
+                ]
+            ).alias("secCode")
+        )
+        .drop("latest_secCode")
+        .sort(["secCode", "date_dt", "date"], nulls_last=True)
+    )
+
+
+def select_target_sec_codes(
+    merged_listup: pl.DataFrame,
+    updated_listup: pl.DataFrame | None,
+) -> list[str]:
+    if updated_listup is None:
+        target_rows = merged_listup
+    else:
+        updated_edinet_codes = (
+            updated_listup.get_column("edinetCode").drop_nulls().unique().to_list()
+        )
+        updated_sec_codes = (
+            updated_listup.select(
+                normalize_sec_code_expr(pl.col("secCode")).alias("secCode")
+            )
+            .get_column("secCode")
+            .drop_nulls()
+            .unique()
+            .to_list()
+        )
+        target_rows = merged_listup.filter(
+            pl.col("edinetCode").is_in(updated_edinet_codes)
+            | pl.col("secCode").is_in(updated_sec_codes)
+        )
+
+    return [
+        str(sec_code)
+        for sec_code in target_rows.get_column("secCode")
+        .drop_nulls()
+        .unique(maintain_order=True)
+        .to_list()
+    ]
+
+
+def validate_existing_history_is_preserved(
+    out_df: pl.DataFrame,
+    out_path: Path,
+) -> None:
+    if not out_path.exists():
+        return
+
+    existing = pl.read_csv(
+        out_path,
+        columns=["date"],
+        schema_overrides={"date": pl.Utf8},
+        infer_schema=False,
+    )
+    existing_dates = Counter(existing.get_column("date").drop_nulls().to_list())
+    new_dates = Counter(
+        out_df.get_column("date").cast(pl.Utf8).drop_nulls().to_list()
+    )
+    missing_dates = existing_dates - new_dates
+    if missing_dates:
+        samples = ", ".join(
+            f"{date} ({count}件)" for date, count in missing_dates.most_common(5)
+        )
+        raise ValueError(
+            f"{out_path} の既存履歴が欠落するため置換を中止します: {samples}"
+        )
 
 
 def read_doc_csv(path: str | Path) -> pl.DataFrame:
@@ -865,14 +1024,13 @@ def calc_eps_bps_cfps(
 
 def _process_sec_code(
     sec_code: str,
-    listup: pl.DataFrame,
+    listup_for_sec_code: pl.DataFrame,
     doc_index: Dict[str, Path],
     out_root: Path,
+    protect_existing_history: bool,
 ) -> None:
-    g = listup.filter(pl.col("secCode") == sec_code)
-
     records = []
-    for r in g.iter_rows(named=True):
+    for r in listup_for_sec_code.iter_rows(named=True):
         date_str = str(r["date"])
         date_dt = r["date_dt"]
         if date_dt is None:
@@ -938,6 +1096,8 @@ def _process_sec_code(
     )
 
     out_path = out_root / f"{sec_code}.csv"
+    if protect_existing_history:
+        validate_existing_history_is_preserved(out_df, out_path)
     write_csv_utf8sig(out_df, out_path)
 
 
@@ -945,73 +1105,21 @@ def _process_sec_code(
 # メイン処理
 # =========================
 def main() -> None:
-    # listup.csv 読み込み
-    listup_path = UPDATED_LISTUP_CSV if UPDATED_LISTUP_CSV.exists() else LISTUP_CSV
-    # secCode can contain alphanumeric values (e.g. 138A0), so read it as string
-    listup = pl.read_csv(
-        source=listup_path,
-        has_header=True,
-        columns=[
-            "date",
-            "docID",
-            "edinetCode",
-            "secCode",
-            "filerName",
-            "docTypeCode",
-            "submitDateTime",
-        ],
-        schema={
-            "date": pl.Utf8,
-            "docID": pl.Utf8,
-            "edinetCode": pl.Utf8,
-            "secCode": pl.Utf8,
-            "filerName": pl.Utf8,
-            "docTypeCode": pl.UInt32,
-            "submitDateTime": pl.Utf8,
-        },
-        null_values=[""],
-        infer_schema=False,
-        infer_schema_length=0,
+    listup, updated_listup = load_merged_listup(
+        LISTUP_CSV,
+        UPDATED_LISTUP_CSV,
     )
+    listup = prepare_listup(listup)
+    target_sec_codes = select_target_sec_codes(listup, updated_listup)
+    incremental = updated_listup is not None
 
-    required_cols = {"secCode", "date", "docID", "edinetCode", "docTypeCode"}
-    missing = required_cols - set(listup.columns)
-    if missing:
-        raise ValueError(f"listup.csv に必要な列がありません: {sorted(missing)}")
-
-    listup = listup.with_columns(
-        normalize_sec_code_expr(pl.col("secCode")).alias("secCode"),
-        pl.col("date")
-        .cast(pl.Utf8)
-        .str.strptime(pl.Datetime, strict=False)
-        .alias("date_dt"),
-    )
-
-    # edinetCodeで最新のsecCodeを取得し、全件に反映
-    non_null_sec = listup.filter(pl.col("secCode").is_not_null()).sort(
-        ["date_dt", "date"], nulls_last=True
-    )
-    latest_sec_code_df = non_null_sec.group_by("edinetCode", maintain_order=True).agg(
-        pl.col("secCode").last().alias("latest_secCode")
-    )
-    listup = (
-        listup.join(latest_sec_code_df, on="edinetCode", how="left")
-        .with_columns(
-            pl.coalesce(
-                [
-                    pl.col("latest_secCode"),
-                    pl.col("secCode"),
-                ]
-            ).alias("secCode")
+    if incremental:
+        print(
+            f"updated_listup.csv の対象 {len(target_sec_codes)} 銘柄を"
+            "完全履歴から再生成します。"
         )
-        .drop("latest_secCode")
-    )
-
-    # secCodeでGroupBy、dateでOrderBy
-    # dateは文字列でも良いが、並びが崩れそうならdatetime化
-    # ここでは datetime化してから出力時は YYYY-MM-DD に戻す
-    # dateが壊れている行は最後に回す
-    listup = listup.sort(["secCode", "date_dt", "date"], nulls_last=True)
+    else:
+        print(f"全 {len(target_sec_codes)} 銘柄を再生成します。")
 
     # docディレクトリを走査してファイル名->パスのindexを作る（高速化）
     doc_index = build_doc_index(DOC_ROOT)
@@ -1020,15 +1128,25 @@ def main() -> None:
     OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
     # secCodeごとに処理
-    sec_codes = (
-        listup.get_column("secCode").drop_nulls().unique(maintain_order=True).to_list()
-    )
+    target_listup = listup.filter(pl.col("secCode").is_in(target_sec_codes))
+    listup_by_sec_code = {
+        str(sec_code): group
+        for (sec_code,), group in target_listup.group_by(
+            "secCode", maintain_order=True
+        )
+        if sec_code is not None
+    }
     with ProcessPoolExecutor() as executor:
         future_to_code = {
             executor.submit(
-                _process_sec_code, str(sec_code), listup, doc_index, OUT_ROOT
-            ): str(sec_code)
-            for sec_code in sec_codes
+                _process_sec_code,
+                sec_code,
+                listup_by_sec_code[sec_code],
+                doc_index,
+                OUT_ROOT,
+                incremental,
+            ): sec_code
+            for sec_code in target_sec_codes
         }
         for future in tqdm(
             as_completed(future_to_code), total=len(future_to_code), desc="secCode"
