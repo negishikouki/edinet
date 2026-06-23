@@ -2,6 +2,7 @@ import requests
 import pandas as pd
 import zipfile
 import io
+import time
 from pathlib import Path
 from enum import IntEnum
 from tqdm import tqdm
@@ -17,6 +18,9 @@ API_KEY = "b053b9de6579485d94409e03743f16c4"
 BASE_URL = "https://api.edinet-fsa.go.jp/api/v2/documents"
 LISTUP_PATH = Path("listup.csv")
 UPDATED_LISTUP_PATH = Path("updated_listup.csv")
+REQUEST_TIMEOUT_SECONDS = 30
+COMMUNICATION_RETRY_COUNT = 3
+RETRY_BACKOFF_SECONDS = 1
 
 doc_prefix_by_frequency = {
     "annual": {"prefix": ["jpcrp030000"], "role": "通期（12か月）"},
@@ -31,11 +35,30 @@ all_prefixes = sorted({p for v in doc_prefix_by_frequency.values() for p in v["p
 # -----------------------------
 # CSV を取得する関数（prefix可変）
 # -----------------------------
+def get_document_response(docID: str, url: str, params: dict) -> requests.Response:
+    for retry_count in range(COMMUNICATION_RETRY_COUNT + 1):
+        try:
+            return requests.get(url, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            if retry_count >= COMMUNICATION_RETRY_COUNT:
+                raise
+
+            wait_seconds = RETRY_BACKOFF_SECONDS * (2 ** retry_count)
+            tqdm.write(
+                f"[RETRY] {docID}: communication error: {e} "
+                f"(retry {retry_count + 1}/{COMMUNICATION_RETRY_COUNT}, "
+                f"wait {wait_seconds}s)"
+            )
+            time.sleep(wait_seconds)
+
+    raise RuntimeError("unreachable")
+
+
 def fetch_all_prefix_dfs(docID: str, prefixes: list[str]) -> dict[str, pd.DataFrame]:
     url = f"{BASE_URL}/{docID}"
     params = {"type": EdinetDocType.CSV, "Subscription-Key": API_KEY}
 
-    res = requests.get(url, params=params)
+    res = get_document_response(docID, url, params)
     res.raise_for_status()
 
     content_type = (res.headers.get("Content-Type") or "").lower()
