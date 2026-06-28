@@ -637,12 +637,14 @@ def pick_value(
         if isinstance(context_id, Iterable) and not isinstance(
             context_id, (str, bytes)
         ):
+            sub = df.head(0)
             for cid in context_id:
-                sub = df.filter(
+                candidate_sub = df.filter(
                     (pl.col(eid_col).cast(pl.Utf8) == element_id)
                     & (cid_col_expr == cid)
                 )
-                if not sub.is_empty():
+                if not candidate_sub.is_empty():
+                    sub = candidate_sub
                     break
         else:
             sub = df.filter(
@@ -685,18 +687,8 @@ def pick_value_any(
     return None
 
 
-def calc_eps_bps_cfps(
-    doc_df: pl.DataFrame, period_type: str
-) -> Tuple[Optional[float], Optional[float], Optional[float]]:
-    """
-    doc CSV DataFrame から EPS, CFPS, BPS を計算して返す。
-    欠損があれば None。
-    """
-
-    # -----------------------------
-    # 発行済株式数
-    # -----------------------------
-    shares_context = {
+def build_issued_shares_contexts() -> dict[str, list[str]]:
+    return {
         "annual": [
             CID_CurrentYearInstant,
             CID_Prior1YearInstant,
@@ -745,6 +737,16 @@ def calc_eps_bps_cfps(
         ],
     }
 
+
+def calc_issued_shares(
+    doc_df: pl.DataFrame, period_type: str
+) -> Optional[float]:
+    """
+    doc CSV DataFrame から発行済株式数を取得して返す。
+    欠損があれば None。
+    """
+
+    shares_context = build_issued_shares_contexts()
     issued_shares = pick_value(
         doc_df,
         EID_TNOIS,
@@ -770,7 +772,7 @@ def calc_eps_bps_cfps(
         # データを取得して、
         # 最大の値をissued_sharesに格納する
         context_ids = shares_context.get(period_type, [])
-        if context_ids:
+        if context_ids and len(doc_df.columns) > 6:
             unit_col = (
                 "ユニットID" if "ユニットID" in doc_df.columns else doc_df.columns[6]
             )
@@ -796,6 +798,19 @@ def calc_eps_bps_cfps(
                 ]
                 if share_values:
                     issued_shares = max(share_values)
+
+    return issued_shares
+
+
+def calc_eps_bps_cfps(
+    doc_df: pl.DataFrame, period_type: str
+) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """
+    doc CSV DataFrame から EPS, CFPS, BPS を計算して返す。
+    欠損があれば None。
+    """
+
+    issued_shares = calc_issued_shares(doc_df, period_type)
 
     ttm_duration_contexts = {
         "annual": [
@@ -1052,6 +1067,7 @@ def _process_sec_code(
         except Exception:
             continue
 
+        issued_shares = calc_issued_shares(doc_df, period_type)
         eps, cfps, bps = calc_eps_bps_cfps(doc_df, period_type)
         records.append(
             {
@@ -1061,6 +1077,7 @@ def _process_sec_code(
                 "EPS": eps,
                 "CFPS": cfps,
                 "BPS": bps,
+                "IssuedShares": issued_shares,
                 "docTypeCode": doc_type_code,
                 "period_type": period_type,
             }
@@ -1070,6 +1087,10 @@ def _process_sec_code(
         return
 
     records.sort(key=lambda item: (item["date_dt"], item["date"]))
+    edinet_history_start_date = next(
+        (rec["date"] for rec in records if rec["CFPS"] is not None),
+        None,
+    )
 
     rows = []
     for rec in records:
@@ -1080,6 +1101,8 @@ def _process_sec_code(
                 "EPS": rec["EPS"],
                 "CFPS": rec["CFPS"],
                 "BPS": rec["BPS"],  # BPSは時点値のためTTM化しない
+                "IssuedShares": rec["IssuedShares"],
+                "EdinetHistoryStartDate": edinet_history_start_date,
                 "docTypeCode": rec["docTypeCode"],
                 "periodType": rec["period_type"],
             }

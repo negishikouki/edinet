@@ -7,6 +7,7 @@ import polars as pl
 
 from index import (
     _process_sec_code,
+    calc_issued_shares,
     load_merged_listup,
     prepare_listup,
     select_target_sec_codes,
@@ -31,6 +32,36 @@ def write_listup(path: Path, rows: list[dict[str, object]]) -> None:
 
 
 class IncrementalIndexTests(unittest.TestCase):
+    def test_calc_issued_shares_uses_current_year_instant(self) -> None:
+        doc_df = pl.DataFrame(
+            [
+                {
+                    "要素ID": "jpcrp_cor:TotalNumberOfIssuedSharesSummaryOfBusinessResults",
+                    "項目名": "発行済株式総数（普通株式）、経営指標等",
+                    "コンテキストID": "Prior1YearInstant_NonConsolidatedMember",
+                    "相対年度": "前期末",
+                    "連結・個別": "その他",
+                    "期間・時点": "時点",
+                    "ユニットID": "shares",
+                    "単位": "",
+                    "値": "100",
+                },
+                {
+                    "要素ID": "jpcrp_cor:TotalNumberOfIssuedSharesSummaryOfBusinessResults",
+                    "項目名": "発行済株式総数（普通株式）、経営指標等",
+                    "コンテキストID": "CurrentYearInstant_NonConsolidatedMember",
+                    "相対年度": "当期末",
+                    "連結・個別": "その他",
+                    "期間・時点": "時点",
+                    "ユニットID": "shares",
+                    "単位": "",
+                    "値": "123",
+                },
+            ]
+        )
+
+        self.assertEqual(calc_issued_shares(doc_df, "annual"), 123.0)
+
     def test_updated_codes_are_rebuilt_from_full_history(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -231,6 +262,7 @@ class IncrementalIndexTests(unittest.TestCase):
 
             with (
                 patch("index.read_doc_csv", return_value=pl.DataFrame()),
+                patch("index.calc_issued_shares", return_value=1000.0),
                 patch("index.calc_eps_bps_cfps", return_value=(1.0, 2.0, 3.0)),
             ):
                 _process_sec_code(
@@ -246,6 +278,82 @@ class IncrementalIndexTests(unittest.TestCase):
             self.assertEqual(
                 result.get_column("date").cast(pl.Utf8).to_list(),
                 ["2024-01-01", "2024-02-01", "2024-03-01"],
+            )
+            self.assertEqual(
+                result.get_column("IssuedShares").cast(pl.Float64).to_list(),
+                [1000.0, 1000.0, 1000.0],
+            )
+            self.assertEqual(
+                result.get_column("EdinetHistoryStartDate").cast(pl.Utf8).to_list(),
+                ["2024-01-01", "2024-01-01", "2024-01-01"],
+            )
+
+    def test_process_sec_code_writes_first_non_null_cfps_history_start_date(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            listup_for_code = prepare_listup(
+                pl.DataFrame(
+                    [
+                        {
+                            "date": "2024-01-01",
+                            "docID": "D1",
+                            "edinetCode": "E1",
+                            "secCode": "10000",
+                            "filerName": "A",
+                            "docTypeCode": 120,
+                            "submitDateTime": "2024-01-01 09:00:00",
+                        },
+                        {
+                            "date": "2024-02-01",
+                            "docID": "D2",
+                            "edinetCode": "E1",
+                            "secCode": "10000",
+                            "filerName": "A",
+                            "docTypeCode": 140,
+                            "submitDateTime": "2024-02-01 09:00:00",
+                        },
+                        {
+                            "date": "2024-03-01",
+                            "docID": "D3",
+                            "edinetCode": "E1",
+                            "secCode": "10000",
+                            "filerName": "A",
+                            "docTypeCode": 140,
+                            "submitDateTime": "2024-03-01 09:00:00",
+                        },
+                    ]
+                )
+            )
+            doc_index = {
+                "D1.csv": root / "D1.csv",
+                "D2.csv": root / "D2.csv",
+                "D3.csv": root / "D3.csv",
+            }
+
+            with (
+                patch("index.read_doc_csv", return_value=pl.DataFrame()),
+                patch("index.calc_issued_shares", return_value=1000.0),
+                patch(
+                    "index.calc_eps_bps_cfps",
+                    side_effect=[
+                        (1.0, None, 3.0),
+                        (1.0, 2.0, 3.0),
+                        (1.0, 4.0, 3.0),
+                    ],
+                ),
+            ):
+                _process_sec_code(
+                    "10000",
+                    listup_for_code,
+                    doc_index,
+                    root,
+                    protect_existing_history=True,
+                )
+
+            result = pl.read_csv(root / "10000.csv")
+            self.assertEqual(
+                result.get_column("EdinetHistoryStartDate").cast(pl.Utf8).to_list(),
+                ["2024-02-01", "2024-02-01", "2024-02-01"],
             )
 
 
