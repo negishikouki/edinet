@@ -1,11 +1,13 @@
-import requests
-import pandas as pd
-import zipfile
 import io
 import time
-from pathlib import Path
+import zipfile
 from enum import IntEnum
+from pathlib import Path
+
+import pandas as pd
+import requests
 from tqdm import tqdm
+
 
 # -----------------------------
 # EDINET 定義
@@ -30,12 +32,13 @@ doc_prefix_by_frequency = {
 }
 
 all_prefixes = sorted({p for v in doc_prefix_by_frequency.values() for p in v["prefix"]})
+RequestParams = dict[str, str | int]
 
 
 # -----------------------------
 # CSV を取得する関数（prefix可変）
 # -----------------------------
-def get_document_response(docID: str, url: str, params: dict) -> requests.Response:
+def get_document_response(docID: str, url: str, params: RequestParams) -> requests.Response:
     for retry_count in range(COMMUNICATION_RETRY_COUNT + 1):
         try:
             return requests.get(url, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
@@ -56,7 +59,7 @@ def get_document_response(docID: str, url: str, params: dict) -> requests.Respon
 
 def fetch_all_prefix_dfs(docID: str, prefixes: list[str]) -> dict[str, pd.DataFrame]:
     url = f"{BASE_URL}/{docID}"
-    params = {"type": EdinetDocType.CSV, "Subscription-Key": API_KEY}
+    params: RequestParams = {"type": int(EdinetDocType.CSV), "Subscription-Key": API_KEY}
 
     res = get_document_response(docID, url, params)
     res.raise_for_status()

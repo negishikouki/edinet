@@ -3,11 +3,11 @@ from __future__ import annotations
 import io
 import os
 from collections import Counter
+from collections.abc import Iterable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
-from collections.abc import Iterable
 
 import polars as pl
 from tqdm import tqdm
@@ -275,25 +275,20 @@ def _write_csv_utf8sig_direct(df: pl.DataFrame, path: Path) -> None:
     except TypeError:
         pass
 
-    csv_bytes = None
+    csv_bytes: bytes | None = None
     try:
-        csv_text = df.write_csv()
-        if isinstance(csv_text, bytes):
-            csv_bytes = csv_text
-        elif isinstance(csv_text, str):
-            csv_bytes = csv_text.encode("utf-8")
+        csv_output = df.write_csv()
+        if isinstance(csv_output, bytes):
+            csv_bytes = csv_output
+        elif isinstance(csv_output, str):
+            csv_bytes = csv_output.encode("utf-8")
     except TypeError:
         pass
 
     if csv_bytes is None:
-        try:
-            buf = io.StringIO()
-            df.write_csv(buf)
-            csv_bytes = buf.getvalue().encode("utf-8")
-        except Exception:
-            buf = io.BytesIO()
-            df.write_csv(buf)
-            csv_bytes = buf.getvalue()
+        text_buf = io.StringIO()
+        df.write_csv(text_buf)
+        csv_bytes = text_buf.getvalue().encode("utf-8")
 
     with open(path, "wb") as f:
         f.write(b"\xef\xbb\xbf")
@@ -876,7 +871,11 @@ def calc_eps_bps_cfps(
         )
         eps = (
             (profit / issued_shares)
-            if (profit is not None and issued_shares not in (None, 0.0))
+            if (
+                profit is not None
+                and issued_shares is not None
+                and issued_shares != 0.0
+            )
             else None
         )
 
@@ -912,7 +911,11 @@ def calc_eps_bps_cfps(
         )
         bps = (
             (net_assets / issued_shares)
-            if (net_assets is not None and issued_shares not in (None, 0.0))
+            if (
+                net_assets is not None
+                and issued_shares is not None
+                and issued_shares != 0.0
+            )
             else None
         )
 
@@ -1012,7 +1015,11 @@ def calc_eps_bps_cfps(
 
     cfps = (
         (oicf / issued_shares)
-        if (oicf is not None and issued_shares not in (None, 0.0))
+        if (
+            oicf is not None
+            and issued_shares is not None
+            and issued_shares != 0.0
+        )
         else None
     )
 
@@ -1030,7 +1037,11 @@ def calc_eps_bps_cfps(
         fcff = _sum_optional([ocf, icf])
         cfps = (
             (fcff / issued_shares)
-            if (fcff is not None and issued_shares not in (None, 0.0))
+            if (
+                fcff is not None
+                and issued_shares is not None
+                and issued_shares != 0.0
+            )
             else None
         )
 

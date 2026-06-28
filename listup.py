@@ -1,9 +1,11 @@
-import requests
+import re
 from datetime import date, timedelta
 from enum import IntEnum
 from pathlib import Path
-import re
+from typing import Any
+
 import pandas as pd
+import requests
 from tqdm import tqdm
 
 
@@ -38,7 +40,7 @@ UPDATED_LISTUP_PATH = Path("updated_listup.csv")
 SEC_CODE_FLOAT_PATTERN = re.compile(r"^([0-9]+)\.0+$")
 
 
-def normalize_sec_code_text(value: object) -> str | None:
+def normalize_sec_code_text(value: Any) -> str | None:
     if pd.isna(value):
         return None
 
@@ -82,9 +84,9 @@ def fetch_listup(start_date: date, end_date: date, existing_doc_ids: set[str]) -
     current = start_date
     with tqdm(total=total_days, desc="EDINET fetching", unit="day") as pbar:
         while current <= end_date:
-            params = {
+            params: dict[str, str | int] = {
                 "date": current.isoformat(),
-                "type": EdinetType.MetaDataAndDocumentList,
+                "type": int(EdinetType.MetaDataAndDocumentList),
                 "Subscription-Key": API_KEY,
             }
 

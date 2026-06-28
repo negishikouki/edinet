@@ -1,6 +1,8 @@
-import requests
-from pathlib import Path
 from enum import IntEnum
+from pathlib import Path
+
+import requests
+
 
 class EdinetDocType(IntEnum):
     MAIN_AND_AUDIT = 1
@@ -15,8 +17,8 @@ docID = "S1006MW7"
 docType = EdinetDocType.CSV
 
 url = f"https://api.edinet-fsa.go.jp/api/v2/documents/{docID}"
-params = {
-    "type": docType,
+params: dict[str, str | int] = {
+    "type": int(docType),
     "Subscription-Key": API_KEY
 }
 

@@ -1,5 +1,5 @@
-from listup import main as listup_main
 from fetch import main as fetch_main
+from listup import main as listup_main
 from recalc import refresh_recalc
 
 

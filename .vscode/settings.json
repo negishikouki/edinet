@@ -1,0 +1,11 @@
+{
+    "python.defaultInterpreterPath": "C:\\Users\\negis\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+    "mypy-type-checker.importStrategy": "useBundled",
+    "mypy-type-checker.interpreter": [
+        "C:\\Users\\negis\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe"
+    ],
+    "mypy-type-checker.args": [
+        "--show-error-codes"
+    ],
+    "mypy-type-checker.reportingScope": "workspace"
+}

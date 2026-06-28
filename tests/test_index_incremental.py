@@ -1,20 +1,13 @@
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 from unittest.mock import patch
 
 import polars as pl
 
-from index import (
-    _process_sec_code,
-    calc_issued_shares,
-    load_merged_listup,
-    prepare_listup,
-    select_target_sec_codes,
-    validate_existing_history_is_preserved,
-    write_csv_utf8sig,
-)
-
+from index import (_process_sec_code, calc_issued_shares, load_merged_listup,
+                   prepare_listup, select_target_sec_codes,
+                   validate_existing_history_is_preserved, write_csv_utf8sig)
 
 LISTUP_COLUMNS = [
     "date",

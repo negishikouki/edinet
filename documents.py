@@ -1,6 +1,7 @@
-import requests
-from doc_type_code import doc_name_to_code
 from enum import IntEnum
+
+import requests
+
 
 class EdinetType(IntEnum):
     MetaDataOnly = 1
@@ -16,9 +17,9 @@ docTypeCode = {
 API_KEY = ""
 
 url = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
-params = {
+params: dict[str, str | int] = {
     "date": "2025-11-14",
-    "type": EdinetType.MetaDataAndDocumentList,
+    "type": int(EdinetType.MetaDataAndDocumentList),
     "Subscription-Key": API_KEY
 }
 

@@ -1,14 +1,15 @@
-import requests
 import json
+
+import requests
 
 API_KEY = ""
 
 url = "https://disclosure.edinet-fsa.go.jp/api/v2/documents.json"
-params = {
+params: dict[str, str | int] = {
     "date": "2025-06-16",
-    "type": 2, 
+    "type": 2,
     "Subscription-Key": API_KEY
-    }
+}
 
 res = requests.get(url, params=params)
 

@@ -1,7 +1,9 @@
 import os
-import pandas as pd
-from pathlib import Path
 import re
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
 from tqdm import tqdm
 
 INDEX_DIR = Path("index")
@@ -14,7 +16,7 @@ TARGET_COLS = ["EPS", "CFPS", "BPS"]
 SEC_CODE_FLOAT_PATTERN = re.compile(r"^([0-9]+)\.0+$")
 
 
-def normalize_sec_code_text(value: object) -> str | None:
+def normalize_sec_code_text(value: Any) -> str | None:
     if pd.isna(value):
         return None
 
@@ -101,7 +103,7 @@ def merge_listups(listup_path: Path, updated_path: Path) -> pd.DataFrame:
     return normalize_sec_code_column(merged)
 
 
-def main():
+def main() -> None:
     listup_df = merge_listups(LISTUP_PATH, UPDATED_LISTUP_PATH)
     filter_names = load_filter_names(listup_df)
     records = []
