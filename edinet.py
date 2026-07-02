@@ -2,7 +2,9 @@ import json
 
 import requests
 
-API_KEY = ""
+from edinet_constants import get_api_key
+
+API_KEY = get_api_key()
 
 url = "https://disclosure.edinet-fsa.go.jp/api/v2/documents.json"
 params: dict[str, str | int] = {

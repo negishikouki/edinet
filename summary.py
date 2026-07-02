@@ -1,10 +1,10 @@
 import os
-import re
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 from tqdm import tqdm
+
+from normalization import normalize_sec_code_text
 
 INDEX_DIR = Path("index")
 SUMMARY_DIR = Path("summary")
@@ -13,18 +13,6 @@ LISTUP_PATH = Path("listup.csv")
 UPDATED_LISTUP_PATH = Path("updated_listup.csv")
 SUMMARY_PATH = SUMMARY_DIR / "edinet_summary.csv"
 TARGET_COLS = ["EPS", "CFPS", "BPS"]
-SEC_CODE_FLOAT_PATTERN = re.compile(r"^([0-9]+)\.0+$")
-
-
-def normalize_sec_code_text(value: Any) -> str | None:
-    if pd.isna(value):
-        return None
-
-    text = str(value).strip()
-    if not text or text.lower() in {"nan", "none"}:
-        return None
-
-    return SEC_CODE_FLOAT_PATTERN.sub(r"\1", text)
 
 
 def normalize_sec_code_column(df: pd.DataFrame) -> pd.DataFrame:
@@ -54,19 +42,19 @@ def load_filter_names(listup_df: pd.DataFrame) -> dict:
     return listup_df.dropna(subset=["secCode"]).set_index("secCode")[name_column].to_dict()
 
 
-def pick_latest_values(df: pd.DataFrame) -> tuple[dict, dict]:
+def pick_latest_values(df: pd.DataFrame) -> tuple[dict[str, object], dict[str, object]]:
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df_sorted = df.sort_values("date")
 
-    values: dict[str, float | pd._libs.missing.NAType] = {}
-    dates: dict[str, str | pd._libs.missing.NAType] = {}
+    values: dict[str, object] = {}
+    dates: dict[str, object] = {}
 
     for col in TARGET_COLS:
         non_null = df_sorted.dropna(subset=["date", col])
         if non_null.empty:
-            values[col] = pd.NA
-            dates[col] = pd.NA
+            values[col] = None
+            dates[col] = None
         else:
             latest_row = non_null.iloc[-1]
             values[col] = latest_row[col]

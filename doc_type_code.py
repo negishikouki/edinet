@@ -41,3 +41,18 @@ doc_type_dict = {
 }
 
 doc_name_to_code = {v: k for k, v in doc_type_dict.items()}
+
+TARGET_DOC_TYPE_CODES = ("120", "130", "140", "150", "160", "170")
+TARGET_DOC_TYPE_NAMES = {
+    code: doc_type_dict[code]
+    for code in TARGET_DOC_TYPE_CODES
+}
+
+DOC_TYPE_PERIOD = {
+    "120": "annual",
+    "130": "annual",
+    "160": "semiannual",
+    "170": "semiannual",
+    "140": "quarterly",
+    "150": "quarterly",
+}

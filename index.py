@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 import io
+import csv
 import os
+import shutil
 from collections import Counter
 from collections.abc import Iterable
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import polars as pl
 from tqdm import tqdm
+
+from doc_type_code import DOC_TYPE_PERIOD
+from edinet_constants import LISTUP_COLUMNS
+from normalization import normalize_sec_code_expr
 
 # =========================
 # 設定
@@ -19,15 +26,6 @@ LISTUP_CSV = Path("./listup.csv")
 UPDATED_LISTUP_CSV = Path("./updated_listup.csv")
 DOC_ROOT = Path("./doc")  # docID.csv を再帰探索するルート
 OUT_ROOT = Path("./index")  # secCode別の出力先
-LISTUP_COLUMNS = [
-    "date",
-    "docID",
-    "edinetCode",
-    "secCode",
-    "filerName",
-    "docTypeCode",
-    "submitDateTime",
-]
 LISTUP_SCHEMA = {
     "date": pl.Utf8,
     "docID": pl.Utf8,
@@ -235,17 +233,32 @@ CID_CurrentYearInstant_NonConsolidated = (
 )
 
 
-# =========================
-# 期間種別（docTypeCode）
-# =========================
-DOC_TYPE_PERIOD = {
-    "120": "annual",
-    "130": "annual",
-    "160": "semiannual",
-    "170": "semiannual",
-    "140": "quarterly",
-    "150": "quarterly",
-}
+STATE_ROOT = Path("state")
+FAILED_INDEX_DOCS_PATH = STATE_ROOT / "failed_index_docs.csv"
+FAILED_INDEX_SEC_CODES_PATH = STATE_ROOT / "failed_index_sec_codes.csv"
+FAILED_INDEX_DOC_COLUMNS = ["docID", "secCode", "path", "error", "updatedAt"]
+FAILED_INDEX_SEC_CODE_COLUMNS = [
+    "secCode",
+    "phase",
+    "error",
+    "summaryPolicy",
+    "updatedAt",
+]
+
+
+@dataclass(frozen=True)
+class IndexDocReadFailure:
+    doc_id: str
+    sec_code: str
+    path: str
+    error: str
+
+
+@dataclass(frozen=True)
+class SecCodeProcessResult:
+    sec_code: str
+    doc_read_failures: list[IndexDocReadFailure]
+    wrote_output: bool
 
 
 # =========================
@@ -305,8 +318,95 @@ def write_csv_utf8sig(df: pl.DataFrame, path: Path) -> None:
         temp_path.unlink(missing_ok=True)
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _read_state_rows(path: Path, key_field: str) -> dict[str, dict[str, str]]:
+    if not path.exists():
+        return {}
+
+    with path.open("r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        rows: dict[str, dict[str, str]] = {}
+        for row in reader:
+            key = row.get(key_field)
+            if key:
+                rows[key] = {k: "" if v is None else v for k, v in row.items()}
+        return rows
+
+
+def _write_state_rows(
+    path: Path,
+    fieldnames: list[str],
+    rows: Iterable[dict[str, str]],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def record_failed_index_docs(
+    failures: Iterable[IndexDocReadFailure],
+    path: Path = FAILED_INDEX_DOCS_PATH,
+) -> None:
+    rows = _read_state_rows(path, "docID")
+    updated_at = _utc_now_iso()
+    for failure in failures:
+        rows[failure.doc_id] = {
+            "docID": failure.doc_id,
+            "secCode": failure.sec_code,
+            "path": failure.path,
+            "error": failure.error,
+            "updatedAt": updated_at,
+        }
+    _write_state_rows(path, FAILED_INDEX_DOC_COLUMNS, rows.values())
+
+
+def clear_failed_index_docs_for_sec_code(
+    sec_code: str,
+    path: Path = FAILED_INDEX_DOCS_PATH,
+) -> None:
+    rows = _read_state_rows(path, "docID")
+    kept = [
+        row
+        for row in rows.values()
+        if row.get("secCode") != sec_code
+    ]
+    _write_state_rows(path, FAILED_INDEX_DOC_COLUMNS, kept)
+
+
+def record_failed_index_sec_code(
+    sec_code: str,
+    phase: str,
+    error: str,
+    path: Path = FAILED_INDEX_SEC_CODES_PATH,
+) -> None:
+    rows = _read_state_rows(path, "secCode")
+    rows[sec_code] = {
+        "secCode": sec_code,
+        "phase": phase,
+        "error": error,
+        "summaryPolicy": "leave_existing_index_for_summary",
+        "updatedAt": _utc_now_iso(),
+    }
+    _write_state_rows(path, FAILED_INDEX_SEC_CODE_COLUMNS, rows.values())
+
+
+def clear_failed_index_sec_code(
+    sec_code: str,
+    path: Path = FAILED_INDEX_SEC_CODES_PATH,
+) -> None:
+    rows = _read_state_rows(path, "secCode")
+    if sec_code not in rows:
+        return
+    del rows[sec_code]
+    _write_state_rows(path, FAILED_INDEX_SEC_CODE_COLUMNS, rows.values())
+
+
 DOC_CSV_NULL_VALUES = ["", "-", "－", "―", "—"]
-SEC_CODE_FLOAT_PATTERN = r"^([0-9]+)\.0+$"
 
 _NUMERIC_NULL_TOKENS = {"", "-", "nan", "null", "none", "n/a"}
 _FULLWIDTH_NUMERIC_TRANS = str.maketrans(
@@ -330,19 +430,6 @@ _FULLWIDTH_NUMERIC_TRANS = str.maketrans(
         "—": "-",
     }
 )
-
-
-def normalize_sec_code_expr(expr: pl.Expr) -> pl.Expr:
-    sec_code = expr.cast(pl.Utf8).str.strip_chars()
-    return (
-        pl.when(
-            sec_code.is_null()
-            | (sec_code == "")
-            | sec_code.fill_null("").str.to_lowercase().is_in(["nan", "none"])
-        )
-        .then(None)
-        .otherwise(sec_code.str.replace(SEC_CODE_FLOAT_PATTERN, "$1"))
-    )
 
 
 def read_listup_csv(path: Path) -> pl.DataFrame:
@@ -1054,8 +1141,10 @@ def _process_sec_code(
     doc_index: Dict[str, Path],
     out_root: Path,
     protect_existing_history: bool,
-) -> None:
+    fail_on_doc_read_error: bool = False,
+) -> SecCodeProcessResult:
     records = []
+    doc_read_failures: list[IndexDocReadFailure] = []
     for r in listup_for_sec_code.iter_rows(named=True):
         date_str = str(r["date"])
         date_dt = r["date_dt"]
@@ -1075,7 +1164,21 @@ def _process_sec_code(
 
         try:
             doc_df = read_doc_csv(doc_path)
-        except Exception:
+        except Exception as exc:
+            doc_read_failures.append(
+                IndexDocReadFailure(
+                    doc_id=doc_id,
+                    sec_code=sec_code,
+                    path=str(doc_path),
+                    error=str(exc),
+                )
+            )
+            if fail_on_doc_read_error:
+                return SecCodeProcessResult(
+                    sec_code=sec_code,
+                    doc_read_failures=doc_read_failures,
+                    wrote_output=False,
+                )
             continue
 
         issued_shares = calc_issued_shares(doc_df, period_type)
@@ -1095,7 +1198,18 @@ def _process_sec_code(
         )
 
     if not records:
-        return
+        return SecCodeProcessResult(
+            sec_code=sec_code,
+            doc_read_failures=doc_read_failures,
+            wrote_output=False,
+        )
+
+    if doc_read_failures:
+        return SecCodeProcessResult(
+            sec_code=sec_code,
+            doc_read_failures=doc_read_failures,
+            wrote_output=False,
+        )
 
     records.sort(key=lambda item: (item["date_dt"], item["date"]))
     edinet_history_start_date = next(
@@ -1133,19 +1247,43 @@ def _process_sec_code(
     if protect_existing_history:
         validate_existing_history_is_preserved(out_df, out_path)
     write_csv_utf8sig(out_df, out_path)
+    return SecCodeProcessResult(
+        sec_code=sec_code,
+        doc_read_failures=[],
+        wrote_output=True,
+    )
 
 
-# =========================
-# メイン処理
-# =========================
-def main() -> None:
+def build_full_rebuild_staging_root() -> Path:
+    root = Path("tmp") / f"index_rebuild_{os.getpid()}_{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}"
+    root.mkdir(parents=True, exist_ok=False)
+    return root
+
+
+def replace_index_from_staging(staging_root: Path, out_root: Path) -> None:
+    out_root.mkdir(parents=True, exist_ok=True)
+    for existing_csv in out_root.glob("*.csv"):
+        existing_csv.unlink()
+    for staged_csv in staging_root.glob("*.csv"):
+        shutil.move(str(staged_csv), out_root / staged_csv.name)
+
+
+def run_index_rebuild(
+    listup_path: Path = LISTUP_CSV,
+    updated_listup_path: Path = UPDATED_LISTUP_CSV,
+    doc_root: Path = DOC_ROOT,
+    out_root: Path = OUT_ROOT,
+    max_workers: int | None = None,
+) -> None:
     listup, updated_listup = load_merged_listup(
-        LISTUP_CSV,
-        UPDATED_LISTUP_CSV,
+        listup_path,
+        updated_listup_path,
     )
     listup = prepare_listup(listup)
     target_sec_codes = select_target_sec_codes(listup, updated_listup)
     incremental = updated_listup is not None
+    working_out_root = out_root
+    staging_root: Path | None = None
 
     if incremental:
         print(
@@ -1154,12 +1292,14 @@ def main() -> None:
         )
     else:
         print(f"全 {len(target_sec_codes)} 銘柄を再生成します。")
+        staging_root = build_full_rebuild_staging_root()
+        working_out_root = staging_root
 
     # docディレクトリを走査してファイル名->パスのindexを作る（高速化）
-    doc_index = build_doc_index(DOC_ROOT)
+    doc_index = build_doc_index(doc_root)
 
     # 出力先作成
-    OUT_ROOT.mkdir(parents=True, exist_ok=True)
+    working_out_root.mkdir(parents=True, exist_ok=True)
 
     # secCodeごとに処理
     target_listup = listup.filter(pl.col("secCode").is_in(target_sec_codes))
@@ -1170,30 +1310,115 @@ def main() -> None:
         )
         if sec_code is not None
     }
-    with ProcessPoolExecutor() as executor:
-        future_to_code = {
-            executor.submit(
-                _process_sec_code,
-                sec_code,
-                listup_by_sec_code[sec_code],
-                doc_index,
-                OUT_ROOT,
-                incremental,
-            ): sec_code
-            for sec_code in target_sec_codes
-        }
-        for future in tqdm(
-            as_completed(future_to_code), total=len(future_to_code), desc="secCode"
-        ):
-            sec_code = future_to_code[future]
-            try:
-                future.result()
-            except Exception as exc:
-                raise RuntimeError(
-                    f"secCode={sec_code} の処理でエラーが発生しました"
-                ) from exc
+    doc_read_failures: list[IndexDocReadFailure] = []
+
+    def handle_result(sec_code: str, result: SecCodeProcessResult) -> None:
+        if result.doc_read_failures:
+            doc_read_failures.extend(result.doc_read_failures)
+            message = (
+                f"secCode={sec_code} で doc CSV 読み込み失敗が "
+                f"{len(result.doc_read_failures)} 件ありました"
+            )
+            if incremental:
+                tqdm.write(f"[WARN] {message}")
+                record_failed_index_docs(result.doc_read_failures)
+                record_failed_index_sec_code(sec_code, "doc_read", message)
+            return
+
+        if incremental:
+            clear_failed_index_docs_for_sec_code(sec_code)
+            clear_failed_index_sec_code(sec_code)
+
+    def handle_exception(sec_code: str, exc: BaseException) -> None:
+        if incremental:
+            message = f"secCode={sec_code} の処理でエラーが発生しました: {exc}"
+            tqdm.write(f"[WARN] {message}")
+            record_failed_index_sec_code(sec_code, "sec_code", message)
+            return
+        raise RuntimeError(
+            f"secCode={sec_code} の処理でエラーが発生しました"
+        ) from exc
+
+    try:
+        if max_workers == 0:
+            for sec_code in tqdm(target_sec_codes, total=len(target_sec_codes), desc="secCode"):
+                try:
+                    result = _process_sec_code(
+                        sec_code,
+                        listup_by_sec_code[sec_code],
+                        doc_index,
+                        working_out_root,
+                        incremental,
+                        not incremental,
+                    )
+                except Exception as exc:
+                    handle_exception(sec_code, exc)
+                    continue
+                handle_result(sec_code, result)
+        else:
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                future_to_code = {
+                    executor.submit(
+                        _process_sec_code,
+                        sec_code,
+                        listup_by_sec_code[sec_code],
+                        doc_index,
+                        working_out_root,
+                        incremental,
+                        not incremental,
+                    ): sec_code
+                    for sec_code in target_sec_codes
+                }
+                for future in tqdm(
+                    as_completed(future_to_code), total=len(future_to_code), desc="secCode"
+                ):
+                    sec_code = future_to_code[future]
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        handle_exception(sec_code, exc)
+                        continue
+                    handle_result(sec_code, result)
+
+        if doc_read_failures and not incremental:
+            record_failed_index_docs(doc_read_failures)
+            for failed_sec_code in sorted(
+                {failure.sec_code for failure in doc_read_failures}
+            ):
+                record_failed_index_sec_code(
+                    failed_sec_code,
+                    "doc_read",
+                    "doc CSV の読み込み失敗があるため、既存 index CSV は上書きしません",
+                )
+            samples = ", ".join(
+                f"{failure.doc_id} ({failure.path})"
+                for failure in doc_read_failures[:5]
+            )
+            raise RuntimeError(
+                "doc CSV の読み込み失敗があるため、既存 index CSV は上書きしません: "
+                f"{samples}"
+            )
+
+        if not incremental and staging_root is not None:
+            replace_index_from_staging(staging_root, out_root)
+            _write_state_rows(FAILED_INDEX_DOCS_PATH, FAILED_INDEX_DOC_COLUMNS, [])
+            _write_state_rows(
+                FAILED_INDEX_SEC_CODES_PATH,
+                FAILED_INDEX_SEC_CODE_COLUMNS,
+                [],
+            )
+    finally:
+        if staging_root is not None:
+            shutil.rmtree(staging_root, ignore_errors=True)
 
     print("done.")
+
+
+# =========================
+# メイン処理
+# =========================
+def main() -> None:
+    run_index_rebuild()
 
 
 def test_S10078N0():
