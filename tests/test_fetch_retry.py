@@ -337,6 +337,35 @@ class FetchCompletionStateTests(unittest.TestCase):
             mock_persist.assert_called_once()
             self.assertEqual(fetch.load_failed_fetch_docs(failed_path), {})
 
+    @patch("fetch.persist_doc_csvs")
+    @patch("fetch.fetch_all_prefix_dfs")
+    def test_main_flushes_failure_cleanup_on_keyboard_interrupt(
+        self,
+        mock_fetch: Mock,
+        mock_persist: Mock,
+    ) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "listup.csv").write_text(
+                "date,docID,edinetCode,secCode,filerName,docTypeCode,submitDateTime\n"
+                "2026-08-14,S100DONE,E1,10000,A,120,2026-08-14 09:00:00\n"
+                "2026-08-14,S100STOP,E1,10000,A,120,2026-08-14 09:00:00\n",
+                encoding="utf-8",
+            )
+            failed_path = root / "state" / "failed_fetch_docs.csv"
+            fetch.record_failed_fetch_doc("S100DONE", "old validation error", failed_path)
+            mock_fetch.side_effect = [fetched_document_for_test(), KeyboardInterrupt()]
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with self.assertRaises(KeyboardInterrupt):
+                    fetch.main()
+            finally:
+                os.chdir(original_cwd)
+
+            mock_persist.assert_called_once()
+            self.assertEqual(fetch.load_failed_fetch_docs(failed_path), {})
+
     @patch("fetch.fetch_all_prefix_dfs")
     def test_main_skips_failed_doc_when_downloaded_marker_exists(
         self,

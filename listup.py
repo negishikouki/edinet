@@ -67,7 +67,7 @@ def write_failed_listup_dates(
         {
             "date": failed_date.isoformat(),
             "error": error,
-            "updatedAt": pd.Timestamp.utcnow().isoformat(),
+            "updatedAt": pd.Timestamp.now(tz="UTC").isoformat(),
         }
         for failed_date, error in sorted(failures.items())
     ]

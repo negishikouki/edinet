@@ -227,7 +227,7 @@ def write_failed_fetch_docs(
         {
             "docID": doc_id,
             "error": error,
-            "updatedAt": pd.Timestamp.utcnow().isoformat(),
+            "updatedAt": pd.Timestamp.now(tz="UTC").isoformat(),
         }
         for doc_id, error in sorted(failures.items())
     ]
@@ -455,28 +455,47 @@ def main() -> bool:
         and doc_id not in fetched_docids
     ]
 
-    for docID in tqdm(docIDs, desc="Fetching per docID"):
+    # Keep the failure ledger in memory during the fetch loop. Re-reading and
+    # rewriting the entire ledger after every successful document makes a
+    # large run dominated by local CSV I/O. New failures are still persisted
+    # immediately; successful-document cleanup is flushed on exit, including
+    # KeyboardInterrupt, so resume behavior remains unchanged.
+    failure_ledger = load_failed_fetch_docs()
+    failure_ledger_dirty = False
+    try:
+        for docID in tqdm(docIDs, desc="Fetching per docID"):
 
-        # 既存チェック
-        if docid_already_fetched(docID, fetched_docids):
-            clear_failed_fetch_doc(docID)
-            tqdm.write(f"[SKIP] {docID}: already exists")
-            continue
+            # 既存チェック
+            if docid_already_fetched(docID, fetched_docids):
+                if docID in failure_ledger:
+                    del failure_ledger[docID]
+                    failure_ledger_dirty = True
+                tqdm.write(f"[SKIP] {docID}: already exists")
+                continue
 
-        try:
-            fetched_document = fetch_all_prefix_dfs(docID)
-            persist_doc_csvs(
-                docID,
-                None,
-                fetched_document,
-                out_root,
-            )
-            fetched_docids.add(docID)
-            clear_failed_fetch_doc(docID)
+            try:
+                fetched_document = fetch_all_prefix_dfs(docID)
+                persist_doc_csvs(
+                    docID,
+                    None,
+                    fetched_document,
+                    out_root,
+                )
+                fetched_docids.add(docID)
+                if docID in failure_ledger:
+                    del failure_ledger[docID]
+                    failure_ledger_dirty = True
 
-        except Exception as e:
-            record_failed_fetch_doc(docID, str(e))
-            tqdm.write(f"[WARN] {docID}: {e}")
+            except Exception as e:
+                error = str(e)
+                if failure_ledger.get(docID) != error:
+                    failure_ledger[docID] = error
+                    write_failed_fetch_docs(failure_ledger)
+                    failure_ledger_dirty = False
+                tqdm.write(f"[WARN] {docID}: {e}")
+    finally:
+        if failure_ledger_dirty:
+            write_failed_fetch_docs(failure_ledger)
 
     return bool(docIDs)
 
