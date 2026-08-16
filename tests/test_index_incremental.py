@@ -256,7 +256,7 @@ class IncrementalIndexTests(unittest.TestCase):
                             "secCode": "10000",
                             "filerName": "A",
                             "docTypeCode": 120,
-                            "submitDateTime": "2024-01-01 09:00:00",
+                            "submitDateTime": "2024-01-03 09:00:00",
                         },
                         {
                             "date": "2024-02-01",
@@ -303,6 +303,22 @@ class IncrementalIndexTests(unittest.TestCase):
             self.assertEqual(
                 result.get_column("date").cast(pl.Utf8).to_list(),
                 ["2024-01-01", "2024-02-01", "2024-03-01"],
+            )
+            self.assertEqual(
+                result.get_column("docID").cast(pl.Utf8).to_list(),
+                ["D1", "D2", "D3"],
+            )
+            self.assertEqual(
+                result.get_column("submitDateTime").cast(pl.Utf8).to_list(),
+                [
+                    "2024-01-03 09:00:00",
+                    "2024-02-01 09:00:00",
+                    "2024-03-01 09:00:00",
+                ],
+            )
+            self.assertEqual(
+                result.get_column("FundamentalAvailableDate").cast(pl.Utf8).to_list(),
+                ["2024-01-03", "2024-02-01", "2024-03-01"],
             )
             self.assertEqual(
                 result.get_column("IssuedShares").cast(pl.Float64).to_list(),

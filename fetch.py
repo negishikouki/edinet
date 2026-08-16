@@ -1,8 +1,10 @@
 import io
+import json
 import os
 import shutil
 import time
 import zipfile
+from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
 from typing import Mapping
@@ -11,7 +13,6 @@ import pandas as pd
 import requests
 from tqdm import tqdm
 
-from doc_type_code import DOC_TYPE_PERIOD
 from edinet_constants import get_api_key
 
 
@@ -34,15 +35,23 @@ STATE_ROOT = Path("state")
 FAILED_FETCH_DOCS_PATH = STATE_ROOT / "failed_fetch_docs.csv"
 FAILED_FETCH_DOCS_COLUMNS = ["docID", "error", "updatedAt"]
 
-doc_prefix_by_frequency = {
-    "annual": {"prefix": ["jpcrp030000"], "role": "通期（12か月）"},
-    "quarterly": {"prefix": ["jpcrp040300"], "role": "3か月（または累計）"},
-    "semiannual": {"prefix": ["jpcrp050000", "jpcrp050200"], "role": "6か月（累計）"},
-    "common": {"prefix": ["jpdei"], "role": "期間・連結区分などのキー"},
-}
-
-all_prefixes = sorted({p for v in doc_prefix_by_frequency.values() for p in v["prefix"]})
 RequestParams = dict[str, str | int]
+
+
+@dataclass(frozen=True)
+class FetchedCsv:
+    source_name: str
+    prefix: str
+    is_body: bool
+    dataframe: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class FetchedDocument:
+    csvs: tuple[FetchedCsv, ...]
+    body_prefixes: tuple[str, ...]
+    body_csv_files: tuple[str, ...]
+    has_jpdei_cor: bool
 
 
 # -----------------------------
@@ -85,7 +94,32 @@ def get_document_response(docID: str, url: str, params: RequestParams) -> reques
     raise RuntimeError("unreachable")
 
 
-def fetch_all_prefix_dfs(docID: str, prefixes: list[str]) -> dict[str, pd.DataFrame]:
+def csv_prefix_from_source_name(source_name: str) -> str:
+    return Path(source_name).stem.split("-", maxsplit=1)[0]
+
+
+def _is_body_csv_prefix(prefix: str) -> bool:
+    return not prefix.startswith("jpaud")
+
+
+def _has_jpdei_cor(df: pd.DataFrame) -> bool:
+    if "要素ID" not in df.columns:
+        return False
+    element_ids = df["要素ID"].astype("string")
+    return bool(element_ids.str.startswith("jpdei_cor:", na=False).any())
+
+
+def fetch_all_prefix_dfs(
+    docID: str,
+    prefixes: list[str] | None = None,
+) -> FetchedDocument:
+    """
+    ZIP内のXBRL_TO_CSV直下にある全CSVを取得する。
+
+    ``prefixes``は旧呼び出し側との互換性のために受け取るが、実際の
+    CSV構成を失わないよう、docTypeCodeによる絞り込みには使用しない。
+    """
+    del prefixes
     url = f"{BASE_URL}/{docID}"
     params: RequestParams = {"type": int(EdinetDocType.CSV), "Subscription-Key": API_KEY}
 
@@ -112,24 +146,38 @@ def fetch_all_prefix_dfs(docID: str, prefixes: list[str]) -> dict[str, pd.DataFr
     if "octet-stream" not in content_type and "zip" not in content_type:
         raise ValueError(f"{docID}: unexpected Content-Type {res.headers.get('Content-Type')}")
 
-    dfs: dict[str, pd.DataFrame] = {}
+    fetched_csvs: list[FetchedCsv] = []
 
     with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
-        names = zf.namelist()
+        csv_names = [
+            name
+            for name in zf.namelist()
+            if name.startswith("XBRL_TO_CSV/")
+            and name.endswith(".csv")
+            and "/" not in name.removeprefix("XBRL_TO_CSV/")
+        ]
 
-        for prefix in prefixes:
-            prefix_path = f"XBRL_TO_CSV/{prefix}"
-            target_files = [
-                name for name in names
-                if name.startswith(prefix_path) and name.endswith(".csv")
-            ]
-            if not target_files:
-                continue
+        for name in sorted(csv_names):
+            source_name = Path(name).name
+            prefix = csv_prefix_from_source_name(source_name)
+            with zf.open(name) as f:
+                dataframe = pd.read_csv(f, encoding="utf-16", sep="\t")
+            fetched_csvs.append(
+                FetchedCsv(
+                    source_name=source_name,
+                    prefix=prefix,
+                    is_body=_is_body_csv_prefix(prefix),
+                    dataframe=dataframe,
+                )
+            )
 
-            with zf.open(target_files[0]) as f:
-                dfs[prefix] = pd.read_csv(f, encoding="utf-16", sep="\t")
-
-    return dfs
+    body_csvs = tuple(csv for csv in fetched_csvs if csv.is_body)
+    return FetchedDocument(
+        csvs=tuple(fetched_csvs),
+        body_prefixes=tuple(dict.fromkeys(csv.prefix for csv in body_csvs)),
+        body_csv_files=tuple(csv.source_name for csv in body_csvs),
+        has_jpdei_cor=any(_has_jpdei_cor(csv.dataframe) for csv in body_csvs),
+    )
 
 
 def build_fetched_docid_set(
@@ -142,12 +190,7 @@ def build_fetched_docid_set(
     if not out_root.exists():
         return set()
 
-    if doc_type_by_id is None:
-        return {
-            marker.stem
-            for marker in (out_root / ".complete").glob("*.complete")
-        }
-    return build_completed_docid_set(out_root, doc_type_by_id)
+    return build_completed_docid_set(out_root, doc_type_by_id or {})
 
 
 def load_failed_fetch_doc_ids(path: Path = FAILED_FETCH_DOCS_PATH) -> set[str]:
@@ -158,6 +201,21 @@ def load_failed_fetch_doc_ids(path: Path = FAILED_FETCH_DOCS_PATH) -> set[str]:
     if "docID" not in df.columns:
         return set()
     return set(df["docID"].dropna().astype(str))
+
+
+def is_permanent_fetch_error(error: str) -> bool:
+    normalized = error.lower()
+    return "404" in normalized and "not found" in normalized
+
+
+def load_permanent_failed_fetch_doc_ids(
+    path: Path = FAILED_FETCH_DOCS_PATH,
+) -> set[str]:
+    return {
+        doc_id
+        for doc_id, error in load_failed_fetch_docs(path).items()
+        if is_permanent_fetch_error(error)
+    }
 
 
 def write_failed_fetch_docs(
@@ -218,36 +276,15 @@ def complete_marker_path(out_root: Path, docID: str) -> Path:
     return out_root / ".complete" / f"{docID}.complete"
 
 
-def required_prefix_groups(doc_type_code: str | int | None) -> list[tuple[str, ...]]:
-    if doc_type_code is None or pd.isna(doc_type_code):
-        return []
-    period_type = DOC_TYPE_PERIOD.get(str(doc_type_code))
-    if period_type is None:
-        return []
-    return [
-        tuple(doc_prefix_by_frequency[period_type]["prefix"]),
-        tuple(doc_prefix_by_frequency["common"]["prefix"]),
-    ]
-
-
-def doc_has_required_csvs(
-    docID: str,
-    doc_type_code: str | int | None,
-    out_root: Path,
-) -> bool:
-    groups = required_prefix_groups(doc_type_code)
-    if not groups:
-        return False
-    return all(
-        any((out_root / prefix / f"{docID}.csv").exists() for prefix in group)
-        for group in groups
-    )
+def document_manifest_path(out_root: Path, docID: str) -> Path:
+    return out_root / ".complete" / f"{docID}.json"
 
 
 def build_completed_docid_set(
     out_root: Path,
-    doc_type_by_id: Mapping[str, str],
+    doc_type_by_id: Mapping[str, str] | None = None,
 ) -> set[str]:
+    del doc_type_by_id
     if not out_root.exists():
         return set()
 
@@ -255,9 +292,20 @@ def build_completed_docid_set(
         marker.stem
         for marker in (out_root / ".complete").glob("*.complete")
     }
-    for doc_id, doc_type_code in doc_type_by_id.items():
-        if doc_has_required_csvs(doc_id, doc_type_code, out_root):
-            completed.add(doc_id)
+    for manifest_path in (out_root / ".complete").glob("*.json"):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if manifest.get("complete") is True:
+            completed.add(manifest_path.stem)
+    # Existing CSVs are authoritative for download-state recovery. This also
+    # covers files created before the completion-marker mechanism existed.
+    completed.update(
+        csv_path.stem.split("__", maxsplit=1)[0]
+        for csv_path in out_root.glob("*/*.csv")
+        if csv_path.parent.name != "jpaud"
+    )
     return completed
 
 
@@ -271,38 +319,78 @@ def docid_already_fetched(docID: str, fetched_docids: set[str]) -> bool:
 def persist_doc_csvs(
     docID: str,
     doc_type_code: str | int | None,
-    dfs_by_prefix: dict[str, pd.DataFrame],
+    fetched_document: FetchedDocument,
     out_root: Path,
-) -> None:
-    groups = required_prefix_groups(doc_type_code)
-    missing_groups = [
-        "/".join(group)
-        for group in groups
-        if not any(prefix in dfs_by_prefix for prefix in group)
-    ]
-    if missing_groups:
-        raise ValueError(
-            f"{docID}: required CSV prefixes are missing: {', '.join(missing_groups)}"
-        )
-
+) -> bool:
+    del doc_type_code
     temp_root = out_root / ".tmp" / f"{docID}.{os.getpid()}.{time.time_ns()}"
+    canonical_body_csv = (
+        fetched_document.body_csv_files[0]
+        if fetched_document.body_csv_files
+        else None
+    )
+    saved_csv_metadata: list[dict[str, str | bool]] = []
     try:
-        for prefix, df in dfs_by_prefix.items():
-            temp_dir = temp_root / prefix
+        temp_root.mkdir(parents=True, exist_ok=True)
+        for csv in fetched_document.csvs:
+            destination_name = (
+                f"{docID}.csv"
+                if csv.source_name == canonical_body_csv
+                else f"{docID}__{csv.source_name}"
+            )
+            temp_dir = temp_root / csv.prefix
             temp_dir.mkdir(parents=True, exist_ok=True)
-            df.to_csv(temp_dir / f"{docID}.csv", index=False)
+            csv.dataframe.to_csv(temp_dir / destination_name, index=False)
+            saved_csv_metadata.append(
+                {
+                    "sourceName": csv.source_name,
+                    "prefix": csv.prefix,
+                    "isBody": csv.is_body,
+                    "path": f"{csv.prefix}/{destination_name}",
+                }
+            )
 
-        for prefix in dfs_by_prefix:
+        for csv_metadata in saved_csv_metadata:
+            relative_path = Path(str(csv_metadata["path"]))
+            prefix = relative_path.parent.name
+            destination_name = relative_path.name
             final_dir = out_root / prefix
             final_dir.mkdir(parents=True, exist_ok=True)
             os.replace(
-                temp_root / prefix / f"{docID}.csv",
-                final_dir / f"{docID}.csv",
+                temp_root / relative_path,
+                final_dir / destination_name,
+            )
+
+        manifest = {
+            "docID": docID,
+            "complete": bool(fetched_document.body_csv_files),
+            "bodyPrefixes": list(fetched_document.body_prefixes),
+            "bodyCsvFiles": list(fetched_document.body_csv_files),
+            "hasJpdeiCor": fetched_document.has_jpdei_cor,
+            "csvFiles": saved_csv_metadata,
+            "updatedAt": pd.Timestamp.now(tz="UTC").isoformat(),
+        }
+        manifest_path = document_manifest_path(out_root, docID)
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_temp_path = temp_root / f"{docID}.json"
+        manifest_temp_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        os.replace(manifest_temp_path, manifest_path)
+
+        if not fetched_document.body_csv_files:
+            raise ValueError(
+                f"{docID}: ZIP contained no body CSV under XBRL_TO_CSV"
             )
 
         marker_path = complete_marker_path(out_root, docID)
         marker_path.parent.mkdir(parents=True, exist_ok=True)
-        marker_path.write_text(pd.Timestamp.utcnow().isoformat(), encoding="utf-8")
+        marker_path.write_text(
+            pd.Timestamp.now(tz="UTC").isoformat(),
+            encoding="utf-8",
+        )
+        return True
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 
@@ -310,18 +398,38 @@ def persist_doc_csvs(
 # -----------------------------
 # main
 # -----------------------------
-def main():
-    listup_path = UPDATED_LISTUP_PATH if UPDATED_LISTUP_PATH.exists() else LISTUP_PATH
+def _load_fetch_listup() -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    for path in (LISTUP_PATH, UPDATED_LISTUP_PATH):
+        if path.exists():
+            frames.append(pd.read_csv(path, low_memory=False))
+    if not frames:
+        raise FileNotFoundError(
+            f"Neither {LISTUP_PATH} nor {UPDATED_LISTUP_PATH} exists."
+        )
+    merged = pd.concat(frames, ignore_index=True)
+    if "docID" not in merged.columns:
+        raise ValueError("EDINET listup is missing docID.")
+    return merged.drop_duplicates(subset=["docID"], keep="last")
+
+
+def main() -> bool:
     out_root = Path("./doc")
     out_root.mkdir(parents=True, exist_ok=True)
-    listup_df = pd.read_csv(listup_path)
+    listup_df = _load_fetch_listup()
     listup_df["docID"] = listup_df["docID"].astype(str)
-    doc_type_by_id = {
-        str(row["docID"]): str(row["docTypeCode"])
-        for row in listup_df[["docID", "docTypeCode"]].dropna().to_dict("records")
-    }
-    fetched_docids = build_completed_docid_set(out_root, doc_type_by_id)
-    docIDs = listup_df["docID"].dropna().astype(str).tolist()
+    fetched_docids = build_completed_docid_set(out_root, {})
+    permanent_failed_doc_ids = load_permanent_failed_fetch_doc_ids()
+    all_doc_ids = listup_df["docID"].dropna().astype(str).tolist()
+    # A downloaded marker takes precedence over an old failure row. The
+    # failure ledger remains an audit trail, but must not trigger a duplicate
+    # download when data is already present locally.
+    docIDs = [
+        doc_id
+        for doc_id in all_doc_ids
+        if doc_id not in permanent_failed_doc_ids
+        and doc_id not in fetched_docids
+    ]
 
     for docID in tqdm(docIDs, desc="Fetching per docID"):
 
@@ -332,11 +440,11 @@ def main():
             continue
 
         try:
-            dfs_by_prefix = fetch_all_prefix_dfs(docID, all_prefixes)
+            fetched_document = fetch_all_prefix_dfs(docID)
             persist_doc_csvs(
                 docID,
-                doc_type_by_id.get(docID),
-                dfs_by_prefix,
+                None,
+                fetched_document,
                 out_root,
             )
             fetched_docids.add(docID)
@@ -345,6 +453,8 @@ def main():
         except Exception as e:
             record_failed_fetch_doc(docID, str(e))
             tqdm.write(f"[WARN] {docID}: {e}")
+
+    return bool(docIDs)
 
 
 if __name__ == "__main__":

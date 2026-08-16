@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from enum import IntEnum
 from pathlib import Path
 
@@ -24,6 +24,7 @@ UPDATED_LISTUP_PATH = Path("updated_listup.csv")
 STATE_ROOT = Path("state")
 FAILED_LISTUP_DATES_PATH = STATE_ROOT / "failed_listup_dates.csv"
 FAILED_LISTUP_COLUMNS = ["date", "error", "updatedAt"]
+JST = timezone(timedelta(hours=9), name="JST")
 
 
 def normalize_sec_code_column(df: pd.DataFrame) -> pd.DataFrame:
@@ -178,9 +179,13 @@ def fetch_listup(start_date: date, end_date: date, existing_doc_ids: set[str]) -
 def main() -> bool:
     existing_df = get_existing_listup()
     start_date = determine_start_date(existing_df)
-    end_date = date.today()
+    end_date = datetime.now(JST).date()
 
-    existing_doc_ids = set(existing_df.get("docID", pd.Series(dtype=str)).astype(str).dropna())
+    existing_doc_ids = (
+        set(existing_df["docID"].astype(str).dropna())
+        if "docID" in existing_df.columns
+        else set()
+    )
 
     new_df = normalize_sec_code_column(fetch_listup(start_date, end_date, existing_doc_ids))
 

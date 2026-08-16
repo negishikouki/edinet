@@ -561,6 +561,29 @@ def validate_existing_history_is_preserved(
         )
 
 
+def _normalize_submit_datetime(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none"}:
+        return None
+    return text
+
+
+def _fundamental_available_date(
+    report_date: str, submit_datetime: str | None
+) -> str:
+    if submit_datetime:
+        candidate = submit_datetime[:10]
+        try:
+            datetime.strptime(candidate, "%Y-%m-%d")
+        except ValueError:
+            pass
+        else:
+            return candidate
+    return report_date
+
+
 def read_doc_csv(path: str | Path) -> pl.DataFrame:
     """
     EDINET doc CSV を文字列優先で読む。
@@ -1151,6 +1174,8 @@ def _process_sec_code(
         if date_dt is None:
             date_dt = datetime.min
         doc_id = str(r["docID"])
+        submit_datetime = _normalize_submit_datetime(r.get("submitDateTime"))
+        available_date = _fundamental_available_date(date_str, submit_datetime)
         doc_type_code = str(r["docTypeCode"])
         fname = f"{doc_id}.csv"
 
@@ -1186,6 +1211,9 @@ def _process_sec_code(
         records.append(
             {
                 "date": date_str,
+                "docID": doc_id,
+                "submitDateTime": submit_datetime,
+                "FundamentalAvailableDate": available_date,
                 "date_dt": date_dt,
                 "secCode": sec_code,
                 "EPS": eps,
@@ -1211,17 +1239,26 @@ def _process_sec_code(
             wrote_output=False,
         )
 
-    records.sort(key=lambda item: (item["date_dt"], item["date"]))
-    edinet_history_start_date = next(
-        (rec["date"] for rec in records if rec["CFPS"] is not None),
-        None,
+    records.sort(
+        key=lambda item: (
+            item["FundamentalAvailableDate"],
+            item["submitDateTime"] or "",
+            item["docID"],
+            item["date_dt"],
+            item["date"],
+        )
     )
+    cfps_dates = [rec["date"] for rec in records if rec["CFPS"] is not None]
+    edinet_history_start_date = min(cfps_dates) if cfps_dates else None
 
     rows = []
     for rec in records:
         rows.append(
             {
                 "date": rec["date"],
+                "docID": rec["docID"],
+                "submitDateTime": rec["submitDateTime"],
+                "FundamentalAvailableDate": rec["FundamentalAvailableDate"],
                 "secCode": rec["secCode"],
                 "EPS": rec["EPS"],
                 "CFPS": rec["CFPS"],

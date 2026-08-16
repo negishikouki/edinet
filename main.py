@@ -4,10 +4,9 @@ from recalc import refresh_recalc
 
 
 def main():
-    is_updated = listup_main()
-    if is_updated:
-        fetch_main()
-        refresh_recalc()
+    listup_main()
+    fetch_main()
+    refresh_recalc()
 
 
 if __name__ == "__main__":

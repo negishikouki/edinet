@@ -1,11 +1,47 @@
+import io
+import json
 import unittest
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
+import zipfile
 
 import requests
 
 import fetch
+
+
+def fetched_document_for_test(
+    doc_id: str = "S100TEST",
+    prefix: str = "jpcrp030000",
+) -> fetch.FetchedDocument:
+    source_name = f"{prefix}-asr-test.csv"
+    dataframe = fetch.pd.DataFrame(
+        {
+            "要素ID": ["jpdei_cor:EDINETCodeDEI"],
+            "値": ["E1"],
+        }
+    )
+    return fetch.FetchedDocument(
+        csvs=(
+            fetch.FetchedCsv(
+                source_name=source_name,
+                prefix=prefix,
+                is_body=True,
+                dataframe=dataframe,
+            ),
+            fetch.FetchedCsv(
+                source_name=f"jpaud-aai-test-{doc_id}.csv",
+                prefix="jpaud",
+                is_body=False,
+                dataframe=dataframe,
+            ),
+        ),
+        body_prefixes=(prefix,),
+        body_csv_files=(source_name,),
+        has_jpdei_cor=True,
+    )
 
 
 class GetDocumentResponseTests(unittest.TestCase):
@@ -101,7 +137,44 @@ class GetDocumentResponseTests(unittest.TestCase):
 
 
 class FetchCompletionStateTests(unittest.TestCase):
-    def test_incomplete_doc_with_one_csv_is_not_completed(self) -> None:
+    @patch("fetch.get_document_response")
+    def test_fetches_all_csvs_and_records_actual_body_prefix(
+        self,
+        mock_get_response: Mock,
+    ) -> None:
+        buffer = io.BytesIO()
+        body_csv = fetch.pd.DataFrame(
+            {
+                "要素ID": ["jpdei_cor:EDINETCodeDEI"],
+                "値": ["E1"],
+            }
+        ).to_csv(index=False, sep="\t").encode("utf-16")
+        audit_csv = fetch.pd.DataFrame(
+            {"要素ID": ["jpaud_cor:AuditExample"], "値": ["x"]}
+        ).to_csv(index=False, sep="\t").encode("utf-16")
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr(
+                "XBRL_TO_CSV/jpcrp080000-asr-test.csv",
+                body_csv,
+            )
+            archive.writestr("XBRL_TO_CSV/jpaud-aai-test.csv", audit_csv)
+
+        response = Mock()
+        response.headers = {"Content-Type": "application/octet-stream"}
+        response.content = buffer.getvalue()
+        response.raise_for_status = Mock()
+        mock_get_response.return_value = response
+
+        fetched = fetch.fetch_all_prefix_dfs("S100TEST", ["jpcrp030000"])
+
+        self.assertEqual(
+            [csv.source_name for csv in fetched.csvs],
+            ["jpaud-aai-test.csv", "jpcrp080000-asr-test.csv"],
+        )
+        self.assertEqual(fetched.body_prefixes, ("jpcrp080000",))
+        self.assertTrue(fetched.has_jpdei_cor)
+
+    def test_existing_csv_is_treated_as_downloaded(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             out_dir = root / "jpcrp030000"
@@ -111,8 +184,8 @@ class FetchCompletionStateTests(unittest.TestCase):
             completed = fetch.build_completed_docid_set(root, {"S100TEST": "120"})
             fetched = fetch.build_fetched_docid_set(root, {"S100TEST": "120"})
 
-            self.assertNotIn("S100TEST", completed)
-            self.assertNotIn("S100TEST", fetched)
+            self.assertIn("S100TEST", completed)
+            self.assertIn("S100TEST", fetched)
 
     def test_doc_without_complete_marker_or_required_csvs_is_refetched(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -128,10 +201,7 @@ class FetchCompletionStateTests(unittest.TestCase):
             fetch.persist_doc_csvs(
                 "S100TEST",
                 "120",
-                {
-                    "jpcrp030000": fetch.pd.DataFrame({"a": [1]}),
-                    "jpdei": fetch.pd.DataFrame({"a": [2]}),
-                },
+                fetched_document_for_test(),
                 root,
             )
 
@@ -139,6 +209,43 @@ class FetchCompletionStateTests(unittest.TestCase):
 
             self.assertIn("S100TEST", completed)
             self.assertTrue(fetch.complete_marker_path(root, "S100TEST").exists())
+            self.assertTrue((root / "jpcrp030000" / "S100TEST.csv").exists())
+            self.assertTrue(
+                (root / "jpaud" / "S100TEST__jpaud-aai-test-S100TEST.csv").exists()
+            )
+            manifest = json.loads(
+                fetch.document_manifest_path(root, "S100TEST").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(manifest["bodyPrefixes"], ["jpcrp030000"])
+            self.assertTrue(manifest["hasJpdeiCor"])
+
+    def test_persist_partial_zip_creates_complete_marker_but_empty_zip_does_not(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            fetch.persist_doc_csvs(
+                "S100PARTIAL",
+                "120",
+                fetched_document_for_test("S100PARTIAL"),
+                root,
+            )
+            with self.assertRaisesRegex(ValueError, "no body CSV"):
+                fetch.persist_doc_csvs(
+                    "S100EMPTY",
+                    "120",
+                    fetch.FetchedDocument((), (), (), False),
+                    root,
+                )
+
+            completed = fetch.build_fetched_docid_set(root)
+
+            self.assertIn("S100PARTIAL", completed)
+            self.assertNotIn("S100EMPTY", completed)
+            self.assertFalse(fetch.complete_marker_path(root, "S100EMPTY").exists())
 
     def test_failed_fetch_doc_is_recorded(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -147,6 +254,97 @@ class FetchCompletionStateTests(unittest.TestCase):
             fetch.record_failed_fetch_doc("S100TEST", "HTTP 503", path)
 
             self.assertEqual(fetch.load_failed_fetch_docs(path), {"S100TEST": "HTTP 503"})
+
+    def test_not_found_failure_is_classified_as_permanent(self) -> None:
+        self.assertTrue(
+            fetch.is_permanent_fetch_error(
+                "EDINET returned JSON (not ZIP). message="
+                "{'metadata': {'status': '404', 'message': 'Not Found'}}"
+            )
+        )
+        self.assertFalse(fetch.is_permanent_fetch_error("HTTP 503"))
+
+    @patch("fetch.fetch_all_prefix_dfs")
+    def test_main_skips_permanent_not_found_failure(
+        self,
+        mock_fetch: Mock,
+    ) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "listup.csv").write_text(
+                "date,docID,edinetCode,secCode,filerName,docTypeCode,submitDateTime\n"
+                "2026-08-14,S100404,E1,10000,A,120,2026-08-14 09:00:00\n",
+                encoding="utf-8",
+            )
+            failed_path = root / "state" / "failed_fetch_docs.csv"
+            fetch.record_failed_fetch_doc(
+                "S100404",
+                "S100404: EDINET returned JSON (not ZIP). message="
+                "{'metadata': {'status': '404', 'message': 'Not Found'}}",
+                failed_path,
+            )
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                fetch.main()
+            finally:
+                os.chdir(original_cwd)
+
+            mock_fetch.assert_not_called()
+
+    @patch("fetch.persist_doc_csvs")
+    @patch("fetch.fetch_all_prefix_dfs")
+    def test_main_retries_recorded_failure_without_new_listup(
+        self,
+        mock_fetch: Mock,
+        mock_persist: Mock,
+    ) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "listup.csv").write_text(
+                "date,docID,edinetCode,secCode,filerName,docTypeCode,submitDateTime\n"
+                "2026-08-14,S100TEST,E1,10000,A,120,2026-08-14 09:00:00\n",
+                encoding="utf-8",
+            )
+            failed_path = root / "state" / "failed_fetch_docs.csv"
+            fetch.record_failed_fetch_doc("S100TEST", "HTTP 503", failed_path)
+            mock_fetch.return_value = fetched_document_for_test()
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                fetch.main()
+            finally:
+                os.chdir(original_cwd)
+
+            mock_fetch.assert_called_once_with("S100TEST")
+            mock_persist.assert_called_once()
+            self.assertEqual(fetch.load_failed_fetch_docs(failed_path), {})
+
+    @patch("fetch.fetch_all_prefix_dfs")
+    def test_main_skips_failed_doc_when_downloaded_marker_exists(
+        self,
+        mock_fetch: Mock,
+    ) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "listup.csv").write_text(
+                "date,docID,edinetCode,secCode,filerName,docTypeCode,submitDateTime\n"
+                "2026-08-14,S100PARTIAL,E1,10000,A,120,2026-08-14 09:00:00\n",
+                encoding="utf-8",
+            )
+            marker = root / "doc" / ".complete" / "S100PARTIAL.complete"
+            marker.parent.mkdir(parents=True)
+            marker.write_text("2026-08-16T00:00:00+00:00\n", encoding="utf-8")
+            failed_path = root / "state" / "failed_fetch_docs.csv"
+            fetch.record_failed_fetch_doc("S100PARTIAL", "HTTP 503", failed_path)
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                fetch.main()
+            finally:
+                os.chdir(original_cwd)
+
+            mock_fetch.assert_not_called()
 
 
 if __name__ == "__main__":
