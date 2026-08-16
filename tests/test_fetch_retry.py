@@ -255,6 +255,23 @@ class FetchCompletionStateTests(unittest.TestCase):
 
             self.assertEqual(fetch.load_failed_fetch_docs(path), {"S100TEST": "HTTP 503"})
 
+    def test_completed_failures_are_removed_from_failure_ledger(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "failed_fetch_docs.csv"
+            fetch.record_failed_fetch_doc("S100DONE", "old validation error", path)
+            fetch.record_failed_fetch_doc("S100RETRY", "HTTP 503", path)
+
+            removed = fetch.clear_failed_fetch_docs_for_completed(
+                {"S100DONE"},
+                path,
+            )
+
+            self.assertEqual(removed, 1)
+            self.assertEqual(
+                fetch.load_failed_fetch_docs(path),
+                {"S100RETRY": "HTTP 503"},
+            )
+
     def test_not_found_failure_is_classified_as_permanent(self) -> None:
         self.assertTrue(
             fetch.is_permanent_fetch_error(

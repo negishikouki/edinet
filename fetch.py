@@ -272,6 +272,22 @@ def clear_failed_fetch_doc(
     write_failed_fetch_docs(failures, path)
 
 
+def clear_failed_fetch_docs_for_completed(
+    completed_doc_ids: set[str],
+    path: Path = FAILED_FETCH_DOCS_PATH,
+) -> int:
+    failures = load_failed_fetch_docs(path)
+    retained = {
+        doc_id: error
+        for doc_id, error in failures.items()
+        if doc_id not in completed_doc_ids
+    }
+    removed_count = len(failures) - len(retained)
+    if removed_count:
+        write_failed_fetch_docs(retained, path)
+    return removed_count
+
+
 def complete_marker_path(out_root: Path, docID: str) -> Path:
     return out_root / ".complete" / f"{docID}.complete"
 
@@ -419,6 +435,14 @@ def main() -> bool:
     listup_df = _load_fetch_listup()
     listup_df["docID"] = listup_df["docID"].astype(str)
     fetched_docids = build_completed_docid_set(out_root, {})
+    removed_completed_failures = clear_failed_fetch_docs_for_completed(
+        fetched_docids
+    )
+    if removed_completed_failures:
+        tqdm.write(
+            f"[INFO] cleared {removed_completed_failures} stale failures "
+            "for completed documents"
+        )
     permanent_failed_doc_ids = load_permanent_failed_fetch_doc_ids()
     all_doc_ids = listup_df["docID"].dropna().astype(str).tolist()
     # A downloaded marker takes precedence over an old failure row. The
