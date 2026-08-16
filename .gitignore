@@ -25,3 +25,9 @@ summary/edinet_summary.csv
 koumoku_list.zip
 koumoku_list/項目リスト_REIT.xls
 koumoku_list/項目リスト_事業会社.xlsx
+# CocoIndex Code (ccc)
+/.cocoindex_code/
+# Added by code-review-graph
+.code-review-graph/
+/tmp/
+/tests/__pycache__/
