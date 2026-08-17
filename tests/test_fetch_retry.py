@@ -303,11 +303,12 @@ class FetchCompletionStateTests(unittest.TestCase):
             original_cwd = Path.cwd()
             try:
                 os.chdir(root)
-                fetch.main()
+                changed = fetch.main()
             finally:
                 os.chdir(original_cwd)
 
             mock_fetch.assert_not_called()
+            self.assertFalse(changed)
 
     @patch("fetch.persist_doc_csvs")
     @patch("fetch.fetch_all_prefix_dfs")
@@ -329,12 +330,13 @@ class FetchCompletionStateTests(unittest.TestCase):
             original_cwd = Path.cwd()
             try:
                 os.chdir(root)
-                fetch.main()
+                changed = fetch.main()
             finally:
                 os.chdir(original_cwd)
 
             mock_fetch.assert_called_once_with("S100TEST")
             mock_persist.assert_called_once()
+            self.assertTrue(changed)
             self.assertEqual(fetch.load_failed_fetch_docs(failed_path), {})
 
     @patch("fetch.persist_doc_csvs")

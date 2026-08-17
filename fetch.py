@@ -430,6 +430,7 @@ def _load_fetch_listup() -> pd.DataFrame:
 
 
 def main() -> bool:
+    """Fetch missing documents and return whether local document data changed."""
     out_root = Path("./doc")
     out_root.mkdir(parents=True, exist_ok=True)
     listup_df = _load_fetch_listup()
@@ -462,6 +463,7 @@ def main() -> bool:
     # KeyboardInterrupt, so resume behavior remains unchanged.
     failure_ledger = load_failed_fetch_docs()
     failure_ledger_dirty = False
+    fetched_count = 0
     try:
         for docID in tqdm(docIDs, desc="Fetching per docID"):
 
@@ -482,6 +484,7 @@ def main() -> bool:
                     out_root,
                 )
                 fetched_docids.add(docID)
+                fetched_count += 1
                 if docID in failure_ledger:
                     del failure_ledger[docID]
                     failure_ledger_dirty = True
@@ -497,7 +500,7 @@ def main() -> bool:
         if failure_ledger_dirty:
             write_failed_fetch_docs(failure_ledger)
 
-    return bool(docIDs)
+    return fetched_count > 0
 
 
 if __name__ == "__main__":
