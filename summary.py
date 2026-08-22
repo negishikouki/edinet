@@ -4,6 +4,7 @@ from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
 
+from edinet_constants import LISTUP_COLUMNS
 from normalization import normalize_sec_code_text
 
 INDEX_DIR = Path("index")
@@ -65,28 +66,24 @@ def pick_latest_values(df: pd.DataFrame) -> tuple[dict[str, object], dict[str, o
 
 def merge_listups(listup_path: Path, updated_path: Path) -> pd.DataFrame:
     frames = []
-    base_columns: list[str] | None = None
 
     if listup_path.exists():
         base_df = normalize_sec_code_column(pd.read_csv(listup_path, low_memory=False))
         frames.append(base_df)
-        base_columns = base_df.columns.tolist()
 
     if updated_path.exists():
         updated_df = normalize_sec_code_column(pd.read_csv(updated_path, low_memory=False))
         frames.append(updated_df)
-        if base_columns is None:
-            base_columns = updated_df.columns.tolist()
 
     if not frames:
-        return pd.DataFrame(columns=base_columns or [])
+        return pd.DataFrame(columns=LISTUP_COLUMNS)
 
     merged = pd.concat(frames, ignore_index=True)
     if "docID" in merged.columns:
         merged = merged.drop_duplicates(subset=["docID"], keep="last")
 
-    if base_columns:
-        merged = merged.reindex(columns=base_columns)
+    extra_columns = sorted(set(merged.columns).difference(LISTUP_COLUMNS))
+    merged = merged.reindex(columns=[*LISTUP_COLUMNS, *extra_columns])
 
     return normalize_sec_code_column(merged)
 

@@ -41,6 +41,7 @@ def fetched_document_for_test(
         body_prefixes=(prefix,),
         body_csv_files=(source_name,),
         has_jpdei_cor=True,
+        raw_zip=b"original-edinet-zip",
     )
 
 
@@ -173,6 +174,7 @@ class FetchCompletionStateTests(unittest.TestCase):
         )
         self.assertEqual(fetched.body_prefixes, ("jpcrp080000",))
         self.assertTrue(fetched.has_jpdei_cor)
+        self.assertEqual(fetched.raw_zip, buffer.getvalue())
 
     def test_existing_csv_is_treated_as_downloaded(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -220,6 +222,12 @@ class FetchCompletionStateTests(unittest.TestCase):
             )
             self.assertEqual(manifest["bodyPrefixes"], ["jpcrp030000"])
             self.assertTrue(manifest["hasJpdeiCor"])
+            self.assertEqual(
+                manifest["rawZip"]["sha256"],
+                fetch.sha256_bytes(b"original-edinet-zip"),
+            )
+            self.assertTrue((root / ".raw_zip" / "S100TEST.zip").exists())
+            self.assertTrue(manifest["csvFiles"][0]["sha256"])
 
     def test_persist_partial_zip_creates_complete_marker_but_empty_zip_does_not(
         self,
@@ -247,6 +255,24 @@ class FetchCompletionStateTests(unittest.TestCase):
             self.assertNotIn("S100EMPTY", completed)
             self.assertFalse(fetch.complete_marker_path(root, "S100EMPTY").exists())
 
+    def test_manifest_hash_mismatch_forces_refetch(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fetch.persist_doc_csvs(
+                "S100TEST",
+                "120",
+                fetched_document_for_test(),
+                root,
+            )
+            (root / "jpcrp030000" / "S100TEST.csv").write_text(
+                "tampered\n",
+                encoding="utf-8",
+            )
+
+            completed = fetch.build_completed_docid_set(root)
+
+            self.assertNotIn("S100TEST", completed)
+
     def test_failed_fetch_doc_is_recorded(self) -> None:
         with TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "failed_fetch_docs.csv"
@@ -273,12 +299,13 @@ class FetchCompletionStateTests(unittest.TestCase):
             )
 
     def test_not_found_failure_is_classified_as_permanent(self) -> None:
-        self.assertTrue(
-            fetch.is_permanent_fetch_error(
-                "EDINET returned JSON (not ZIP). message="
-                "{'metadata': {'status': '404', 'message': 'Not Found'}}"
-            )
+        error = (
+            "EDINET returned JSON (not ZIP). message="
+            "{'metadata': {'status': '404', 'message': 'Not Found'}}"
         )
+        self.assertFalse(fetch.is_permanent_fetch_error(error))
+        self.assertTrue(fetch.is_permanent_fetch_error(error, csv_flag="0", xbrl_flag="0"))
+        self.assertFalse(fetch.is_permanent_fetch_error(error, csv_flag="1", xbrl_flag="1"))
         self.assertFalse(fetch.is_permanent_fetch_error("HTTP 503"))
 
     @patch("fetch.fetch_all_prefix_dfs")
@@ -289,8 +316,10 @@ class FetchCompletionStateTests(unittest.TestCase):
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             (root / "listup.csv").write_text(
-                "date,docID,edinetCode,secCode,filerName,docTypeCode,submitDateTime\n"
-                "2026-08-14,S100404,E1,10000,A,120,2026-08-14 09:00:00\n",
+                "date,docID,edinetCode,secCode,filerName,docTypeCode,"
+                "submitDateTime,csvFlag,xbrlFlag\n"
+                "2026-08-14,S100404,E1,10000,A,120,"
+                "2026-08-14 09:00:00,0,0\n",
                 encoding="utf-8",
             )
             failed_path = root / "state" / "failed_fetch_docs.csv"
@@ -309,6 +338,13 @@ class FetchCompletionStateTests(unittest.TestCase):
 
             mock_fetch.assert_not_called()
             self.assertFalse(changed)
+            classifications = fetch.load_fetch_classifications(
+                root / "state" / "fetch_classifications.csv"
+            )
+            self.assertEqual(
+                classifications["S100404"]["classification"],
+                "no_csv_or_xbrl",
+            )
 
     @patch("fetch.persist_doc_csvs")
     @patch("fetch.fetch_all_prefix_dfs")

@@ -1,3 +1,4 @@
+import json
 from datetime import date, datetime, timedelta, timezone
 from enum import IntEnum
 from pathlib import Path
@@ -9,6 +10,7 @@ from tqdm import tqdm
 from doc_type_code import TARGET_DOC_TYPE_NAMES
 from edinet_constants import LISTUP_COLUMNS, get_api_key
 from normalization import normalize_sec_code_text
+from provenance import file_identity, sha256_bytes, write_bytes_atomic, write_text_atomic
 
 
 class EdinetType(IntEnum):
@@ -24,7 +26,131 @@ UPDATED_LISTUP_PATH = Path("updated_listup.csv")
 STATE_ROOT = Path("state")
 FAILED_LISTUP_DATES_PATH = STATE_ROOT / "failed_listup_dates.csv"
 FAILED_LISTUP_COLUMNS = ["date", "error", "updatedAt"]
+LIST_RESPONSE_ROOT = STATE_ROOT / "list_responses"
+LAST_SUCCESSFUL_LISTUP_DATE_PATH = STATE_ROOT / "last_successful_listup_date.txt"
+LIST_EVENT_COLUMNS = [
+    "queryDate",
+    "responseSha256",
+    "docID",
+    "edinetCode",
+    "secCode",
+    "filerName",
+    "docTypeCode",
+    "submitDateTime",
+    "opeDateTime",
+    "docInfoEditStatus",
+    "withdrawalStatus",
+    "disclosureStatus",
+    "csvFlag",
+    "xbrlFlag",
+    "pdfFlag",
+    "englishDocFlag",
+]
 JST = timezone(timedelta(hours=9), name="JST")
+
+
+def ensure_listup_columns(df: pd.DataFrame) -> pd.DataFrame:
+    result = df.copy()
+    for column in LISTUP_COLUMNS:
+        if column not in result.columns:
+            result[column] = pd.NA
+    return pd.DataFrame(result.loc[:, list(LISTUP_COLUMNS)])
+
+
+def _json_response_bytes(
+    response: requests.Response,
+    payload: dict[str, object],
+) -> bytes:
+    content = getattr(response, "content", b"")
+    if isinstance(content, bytes) and content:
+        return content
+    return (
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def persist_list_response(
+    query_date: date,
+    response: requests.Response,
+    payload: dict[str, object],
+) -> Path:
+    """Persist the exact response, its event fields, and SHA-256 identities."""
+
+    content = _json_response_bytes(response, payload)
+    response_sha256 = sha256_bytes(content)
+    response_dir = (
+        LIST_RESPONSE_ROOT
+        / f"{query_date.year:04d}"
+        / query_date.isoformat()
+    )
+    raw_path = response_dir / f"{response_sha256}.json"
+    if not raw_path.exists():
+        write_bytes_atomic(raw_path, content)
+    write_text_atomic(
+        raw_path.with_suffix(f"{raw_path.suffix}.sha256"),
+        f"{response_sha256}  {raw_path.name}\n",
+    )
+
+    results = payload.get("results", [])
+    documents = results if isinstance(results, list) else []
+    event_rows: list[dict[str, object | None]] = []
+    for value in documents:
+        if not isinstance(value, dict):
+            continue
+        doc = {str(key): item for key, item in value.items()}
+        event_rows.append(
+            {
+                "queryDate": query_date.isoformat(),
+                "responseSha256": response_sha256,
+                "docID": doc.get("docID"),
+                "edinetCode": doc.get("edinetCode"),
+                "secCode": normalize_sec_code_text(doc.get("secCode")),
+                "filerName": doc.get("filerName"),
+                "docTypeCode": doc.get("docTypeCode"),
+                "submitDateTime": doc.get("submitDateTime"),
+                "opeDateTime": doc.get("opeDateTime"),
+                "docInfoEditStatus": doc.get("docInfoEditStatus"),
+                "withdrawalStatus": doc.get("withdrawalStatus"),
+                "disclosureStatus": doc.get("disclosureStatus"),
+                "csvFlag": doc.get("csvFlag"),
+                "xbrlFlag": doc.get("xbrlFlag"),
+                "pdfFlag": doc.get("pdfFlag"),
+                "englishDocFlag": doc.get("englishDocFlag"),
+            }
+        )
+    events_path = response_dir / f"{response_sha256}.events.csv"
+    events_content = pd.DataFrame(
+        event_rows,
+        columns=LIST_EVENT_COLUMNS,
+    ).to_csv(index=False).encode("utf-8")
+    write_bytes_atomic(events_path, events_content)
+    manifest_path = response_dir / f"{response_sha256}.manifest.json"
+    manifest = {
+        "manifestSchemaVersion": 1,
+        "queryDate": query_date.isoformat(),
+        "responseSha256": response_sha256,
+        "rawJson": file_identity(raw_path, root=response_dir),
+        "eventsCsv": file_identity(events_path, root=response_dir),
+    }
+    write_text_atomic(
+        manifest_path,
+        json.dumps(
+            manifest,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        )
+        + "\n",
+    )
+    return raw_path
 
 
 def normalize_sec_code_column(df: pd.DataFrame) -> pd.DataFrame:
@@ -111,20 +237,76 @@ def build_listup_fetch_dates(
 
 
 def get_existing_listup() -> pd.DataFrame:
-    if LISTUP_PATH.exists():
-        return normalize_sec_code_column(pd.read_csv(LISTUP_PATH, low_memory=False))
-    return pd.DataFrame(columns=LISTUP_COLUMNS)
+    frames: list[pd.DataFrame] = []
+    for path in (LISTUP_PATH, UPDATED_LISTUP_PATH):
+        if path.exists():
+            frames.append(
+                ensure_listup_columns(pd.read_csv(path, low_memory=False))
+            )
+    if not frames:
+        return pd.DataFrame(columns=LISTUP_COLUMNS)
+    merged = pd.concat(frames, ignore_index=True)
+    if "docID" in merged.columns:
+        merged = merged.drop_duplicates("docID", keep="last")
+    return normalize_sec_code_column(ensure_listup_columns(merged))
+
+
+def load_last_successful_listup_date() -> date | None:
+    if not LAST_SUCCESSFUL_LISTUP_DATE_PATH.is_file():
+        return None
+    try:
+        return date.fromisoformat(
+            LAST_SUCCESSFUL_LISTUP_DATE_PATH.read_text(encoding="utf-8").strip()
+        )
+    except ValueError:
+        return None
+
+
+def record_last_successful_listup_date(successful_date: date) -> None:
+    write_text_atomic(
+        LAST_SUCCESSFUL_LISTUP_DATE_PATH,
+        f"{successful_date.isoformat()}\n",
+    )
 
 
 def determine_start_date(existing_df: pd.DataFrame) -> date:
+    candidates: list[date] = []
     if "date" in existing_df.columns:
         dt = pd.to_datetime(existing_df["date"], errors="coerce")
         if dt.notna().any():
-            return dt.max().date()
-    return DEFAULT_START_DATE
+            candidates.append(dt.max().date())
+    last_successful_date = load_last_successful_listup_date()
+    if last_successful_date is not None:
+        candidates.append(last_successful_date)
+    return max(candidates) if candidates else DEFAULT_START_DATE
+
+
+def build_listup_row(
+    query_date: date,
+    doc: dict[str, object],
+) -> dict[str, object | None]:
+    return {
+        "date": query_date.isoformat(),
+        "docID": doc.get("docID"),
+        "edinetCode": doc.get("edinetCode"),
+        "secCode": normalize_sec_code_text(doc.get("secCode")),
+        "filerName": doc.get("filerName"),
+        "docTypeCode": doc.get("docTypeCode"),
+        "submitDateTime": doc.get("submitDateTime"),
+        "listQueryDate": query_date.isoformat(),
+        "opeDateTime": doc.get("opeDateTime"),
+        "docInfoEditStatus": doc.get("docInfoEditStatus"),
+        "withdrawalStatus": doc.get("withdrawalStatus"),
+        "disclosureStatus": doc.get("disclosureStatus"),
+        "csvFlag": doc.get("csvFlag"),
+        "xbrlFlag": doc.get("xbrlFlag"),
+        "pdfFlag": doc.get("pdfFlag"),
+        "englishDocFlag": doc.get("englishDocFlag"),
+    }
 
 
 def fetch_listup(start_date: date, end_date: date, existing_doc_ids: set[str]) -> pd.DataFrame:
+    del existing_doc_ids
     fetch_dates = build_listup_fetch_dates(
         start_date,
         end_date,
@@ -146,26 +328,28 @@ def fetch_listup(start_date: date, end_date: date, existing_doc_ids: set[str]) -
             try:
                 res = requests.get(BASE_URL, params=params, timeout=30)
                 res.raise_for_status()
-                data = res.json()
+                response_payload: object = res.json()
+                if not isinstance(response_payload, dict):
+                    raise ValueError("EDINET list response must be a JSON object")
+                data = {
+                    str(key): value for key, value in response_payload.items()
+                }
+                persist_list_response(current, res, data)
 
-                for doc in data.get("results", []):
+                results = data.get("results", [])
+                documents = results if isinstance(results, list) else []
+                for value in documents:
+                    if not isinstance(value, dict):
+                        continue
+                    doc = {str(key): item for key, item in value.items()}
                     doc_id = doc.get("docID")
                     if (
                         doc.get("docTypeCode") in TARGET_DOC_TYPE_NAMES
                         and doc_id is not None
-                        and doc_id not in existing_doc_ids
                     ):
-                        row = {
-                            "date": current.isoformat(),
-                            "docID": doc_id,
-                            "edinetCode": doc.get("edinetCode"),
-                            "secCode": normalize_sec_code_text(doc.get("secCode")),
-                            "filerName": doc.get("filerName"),
-                            "docTypeCode": doc.get("docTypeCode"),
-                            "submitDateTime": doc.get("submitDateTime"),
-                        }
-                        listup.append(row)
+                        listup.append(build_listup_row(current, doc))
                 clear_failed_listup_date(current)
+                record_last_successful_listup_date(current)
 
             except Exception as e:
                 print(f"[ERROR] {current}: {e}")
@@ -173,7 +357,52 @@ def fetch_listup(start_date: date, end_date: date, existing_doc_ids: set[str]) -
 
             pbar.update(1)
 
-    return normalize_sec_code_column(pd.DataFrame(listup, columns=LISTUP_COLUMNS))
+    return normalize_sec_code_column(
+        ensure_listup_columns(pd.DataFrame(listup, columns=LISTUP_COLUMNS))
+    )
+
+
+def _comparable_value(value: object) -> str:
+    return "" if value is None or bool(pd.isna(value)) else str(value)
+
+
+def select_changed_listup_rows(
+    fetched_df: pd.DataFrame,
+    existing_df: pd.DataFrame,
+) -> pd.DataFrame:
+    if fetched_df.empty:
+        return pd.DataFrame(columns=LISTUP_COLUMNS)
+    existing_by_id = {
+        str(row["docID"]): row
+        for row in ensure_listup_columns(existing_df).to_dict("records")
+        if row.get("docID") is not None and not bool(pd.isna(row.get("docID")))
+    }
+    compared_columns = [
+        column
+        for column in LISTUP_COLUMNS
+        if column not in {"date", "listQueryDate"}
+    ]
+    changed_rows: list[dict[str, object]] = []
+    for row in ensure_listup_columns(fetched_df).to_dict("records"):
+        doc_id_value = row.get("docID")
+        if doc_id_value is None or bool(pd.isna(doc_id_value)):
+            continue
+        doc_id = str(doc_id_value)
+        existing = existing_by_id.get(doc_id)
+        if existing is None:
+            changed_rows.append({str(key): value for key, value in row.items()})
+            continue
+        if any(
+            _comparable_value(row.get(column))
+            != _comparable_value(existing.get(column))
+            for column in compared_columns
+        ):
+            updated = {str(key): value for key, value in row.items()}
+            updated["date"] = existing.get("date")
+            changed_rows.append(updated)
+    return normalize_sec_code_column(
+        ensure_listup_columns(pd.DataFrame(changed_rows))
+    )
 
 
 def main() -> bool:
@@ -187,16 +416,33 @@ def main() -> bool:
         else set()
     )
 
-    new_df = normalize_sec_code_column(fetch_listup(start_date, end_date, existing_doc_ids))
+    fetched_df = normalize_sec_code_column(
+        fetch_listup(start_date, end_date, existing_doc_ids)
+    )
+    new_df = select_changed_listup_rows(fetched_df, existing_df)
 
     if new_df.empty:
         print("No new records found.")
-        if UPDATED_LISTUP_PATH.exists():
-            UPDATED_LISTUP_PATH.unlink()
         return False
 
-    new_df.to_csv(UPDATED_LISTUP_PATH, index=False)
-    print(f"Saved {len(new_df)} new records to {UPDATED_LISTUP_PATH}.")
+    pending_frames = [new_df]
+    if UPDATED_LISTUP_PATH.exists():
+        pending_frames.insert(
+            0,
+            ensure_listup_columns(
+                pd.read_csv(UPDATED_LISTUP_PATH, low_memory=False)
+            ),
+        )
+    pending = (
+        pd.concat(pending_frames, ignore_index=True)
+        .drop_duplicates("docID", keep="last")
+        .reset_index(drop=True)
+    )
+    write_bytes_atomic(
+        UPDATED_LISTUP_PATH,
+        ensure_listup_columns(pending).to_csv(index=False).encode("utf-8"),
+    )
+    print(f"Saved {len(new_df)} changed records to {UPDATED_LISTUP_PATH}.")
     return True
 
 

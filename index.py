@@ -34,6 +34,15 @@ LISTUP_SCHEMA = {
     "filerName": pl.Utf8,
     "docTypeCode": pl.UInt32,
     "submitDateTime": pl.Utf8,
+    "listQueryDate": pl.Utf8,
+    "opeDateTime": pl.Utf8,
+    "docInfoEditStatus": pl.Utf8,
+    "withdrawalStatus": pl.Utf8,
+    "disclosureStatus": pl.Utf8,
+    "csvFlag": pl.Utf8,
+    "xbrlFlag": pl.Utf8,
+    "pdfFlag": pl.Utf8,
+    "englishDocFlag": pl.Utf8,
 }
 
 # EDINET（jppfs_cor）最小セット
@@ -433,15 +442,23 @@ _FULLWIDTH_NUMERIC_TRANS = str.maketrans(
 
 
 def read_listup_csv(path: Path) -> pl.DataFrame:
-    return pl.read_csv(
+    frame = pl.read_csv(
         source=path,
         has_header=True,
-        columns=LISTUP_COLUMNS,
-        schema=LISTUP_SCHEMA,
         null_values=[""],
         infer_schema=False,
         infer_schema_length=0,
     )
+    expressions: list[pl.Expr] = []
+    for column in LISTUP_COLUMNS:
+        dtype = LISTUP_SCHEMA[column]
+        if column in frame.columns:
+            expressions.append(
+                pl.col(column).cast(dtype, strict=False).alias(column)
+            )
+        else:
+            expressions.append(pl.lit(None, dtype=dtype).alias(column))
+    return frame.select(expressions)
 
 
 def load_merged_listup(

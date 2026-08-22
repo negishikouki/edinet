@@ -13,6 +13,15 @@ LISTUP_COLUMNS = [
     "filerName",
     "docTypeCode",
     "submitDateTime",
+    "listQueryDate",
+    "opeDateTime",
+    "docInfoEditStatus",
+    "withdrawalStatus",
+    "disclosureStatus",
+    "csvFlag",
+    "xbrlFlag",
+    "pdfFlag",
+    "englishDocFlag",
 ]
 
 
