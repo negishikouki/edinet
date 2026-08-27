@@ -1476,7 +1476,7 @@ def main() -> None:
 
 
 def test_S10078N0():
-    doc_path = r"D:\source\repos\edinet\doc\jpcrp030000\S100W5M9.csv"
+    doc_path = r"C:\fastdata\edinet\doc\jpcrp030000\S100W5M9.csv"
     doc_df = read_doc_csv(doc_path)
     eps, cfps, bps = calc_eps_bps_cfps(doc_df, "annual")
     print(eps, cfps, bps)

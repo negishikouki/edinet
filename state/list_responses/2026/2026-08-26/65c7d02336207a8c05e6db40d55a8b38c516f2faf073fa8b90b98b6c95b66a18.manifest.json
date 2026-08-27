@@ -1,0 +1,15 @@
+{
+  "eventsCsv": {
+    "path": "65c7d02336207a8c05e6db40d55a8b38c516f2faf073fa8b90b98b6c95b66a18.events.csv",
+    "sha256": "70aacbbc7ef32af85d5f5cc6336308349faeb4eeba11b928ac7ab00facb139c6",
+    "size": 39808
+  },
+  "manifestSchemaVersion": 1,
+  "queryDate": "2026-08-26",
+  "rawJson": {
+    "path": "65c7d02336207a8c05e6db40d55a8b38c516f2faf073fa8b90b98b6c95b66a18.json",
+    "sha256": "65c7d02336207a8c05e6db40d55a8b38c516f2faf073fa8b90b98b6c95b66a18",
+    "size": 218625
+  },
+  "responseSha256": "65c7d02336207a8c05e6db40d55a8b38c516f2faf073fa8b90b98b6c95b66a18"
+}
