@@ -42,6 +42,30 @@ class ListupFailureStateTests(unittest.TestCase):
                     {date(2024, 1, 1): "timeout"},
                 )
 
+    def test_forbidden_error_is_raised_and_not_persisted(self) -> None:
+        response = Mock(spec=requests.Response)
+        response.status_code = 403
+        error = requests.exceptions.HTTPError(
+            "403 Client Error: Forbidden",
+            response=response,
+        )
+        response.raise_for_status.side_effect = error
+
+        with TemporaryDirectory() as temp_dir:
+            with temporary_cwd(Path(temp_dir)):
+                with patch("listup.requests.get", return_value=response):
+                    with self.assertRaisesRegex(
+                        requests.exceptions.HTTPError,
+                        "403 Client Error: Forbidden",
+                    ):
+                        listup.fetch_listup(
+                            date(2024, 1, 1),
+                            date(2024, 1, 2),
+                            set(),
+                        )
+
+                self.assertFalse(Path("state/failed_listup_dates.csv").exists())
+
     def test_failed_dates_are_added_to_next_fetch_dates(self) -> None:
         with TemporaryDirectory() as temp_dir:
             with temporary_cwd(Path(temp_dir)):

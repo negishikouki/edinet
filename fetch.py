@@ -4,16 +4,17 @@ import os
 import shutil
 import time
 import zipfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import Mapping
 
 import pandas as pd
 import requests
 from tqdm import tqdm
 
 from edinet_constants import get_api_key
+from normalization import is_missing_scalar
 from provenance import file_identity, sha256_bytes, sha256_file, write_bytes_atomic
 
 
@@ -143,7 +144,7 @@ def fetch_all_prefix_dfs(
     if "application/json" in content_type:
         try:
             j = res.json()
-        except Exception:
+        except ValueError:
             raise ValueError(f"{docID}: JSON returned but failed to parse. body={res.text[:500]}")
 
         # 代表的なキーを拾って分かりやすくする
@@ -216,11 +217,10 @@ def load_failed_fetch_doc_ids(path: Path = FAILED_FETCH_DOCS_PATH) -> set[str]:
 
 
 def normalize_availability_flag(value: object) -> str | None:
-    if value is None or bool(pd.isna(value)):
+    if is_missing_scalar(value):
         return None
     normalized = str(value).strip()
-    if normalized.endswith(".0"):
-        normalized = normalized[:-2]
+    normalized = normalized.removesuffix(".0")
     return normalized if normalized in {"0", "1"} else None
 
 
@@ -318,7 +318,7 @@ def load_fetch_classifications(
     result: dict[str, dict[str, object]] = {}
     for row in frame.to_dict("records"):
         doc_id = row.get("docID")
-        if doc_id is None or bool(pd.isna(doc_id)):
+        if is_missing_scalar(doc_id):
             continue
         result[str(doc_id)] = {str(key): value for key, value in row.items()}
     return result
@@ -368,10 +368,10 @@ def load_failed_fetch_docs(path: Path = FAILED_FETCH_DOCS_PATH) -> dict[str, str
         return failures
     for row in df.to_dict("records"):
         doc_id = row.get("docID")
-        if doc_id is None or pd.isna(doc_id):
+        if is_missing_scalar(doc_id):
             continue
         error = row.get("error")
-        failures[str(doc_id)] = "" if error is None or pd.isna(error) else str(error)
+        failures[str(doc_id)] = "" if is_missing_scalar(error) else str(error)
     return failures
 
 
@@ -620,7 +620,7 @@ def main() -> bool:
     capabilities: dict[str, tuple[object, object]] = {}
     for row in listup_df.to_dict("records"):
         doc_id = row.get("docID")
-        if doc_id is None or bool(pd.isna(doc_id)):
+        if is_missing_scalar(doc_id):
             continue
         capabilities[str(doc_id)] = (
             row.get("csvFlag"),
@@ -727,7 +727,13 @@ def main() -> bool:
                     del classifications[docID]
                     classifications_dirty = True
 
-            except Exception as e:
+            except (
+                OSError,
+                UnicodeError,
+                ValueError,
+                zipfile.BadZipFile,
+                requests.exceptions.RequestException,
+            ) as e:
                 error = str(e)
                 if is_not_found_error(error):
                     csv_flag, xbrl_flag = capabilities.get(docID, (None, None))

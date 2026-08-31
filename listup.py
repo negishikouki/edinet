@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 from doc_type_code import TARGET_DOC_TYPE_NAMES
 from edinet_constants import LISTUP_COLUMNS, get_api_key
-from normalization import normalize_sec_code_text
+from normalization import is_missing_scalar, normalize_sec_code_text
 from provenance import file_identity, sha256_bytes, write_bytes_atomic, write_text_atomic
 
 
@@ -173,14 +173,14 @@ def load_failed_listup_dates(path: Path = FAILED_LISTUP_DATES_PATH) -> dict[date
 
     for row in df.to_dict("records"):
         value = row.get("date")
-        if value is None or pd.isna(value):
+        if is_missing_scalar(value):
             continue
         try:
             failed_date = date.fromisoformat(str(value))
         except ValueError:
             continue
         error = row.get("error")
-        failures[failed_date] = "" if error is None or pd.isna(error) else str(error)
+        failures[failed_date] = "" if is_missing_scalar(error) else str(error)
     return failures
 
 
@@ -330,7 +330,7 @@ def fetch_listup(start_date: date, end_date: date, existing_doc_ids: set[str]) -
                 res.raise_for_status()
                 response_payload: object = res.json()
                 if not isinstance(response_payload, dict):
-                    raise ValueError("EDINET list response must be a JSON object")
+                    raise TypeError("EDINET list response must be a JSON object")
                 data = {
                     str(key): value for key, value in response_payload.items()
                 }
@@ -351,7 +351,17 @@ def fetch_listup(start_date: date, end_date: date, existing_doc_ids: set[str]) -
                 clear_failed_listup_date(current)
                 record_last_successful_listup_date(current)
 
-            except Exception as e:
+            except requests.exceptions.HTTPError as e:
+                if e.response is not None and e.response.status_code == 403:
+                    raise
+                print(f"[ERROR] {current}: {e}")
+                record_failed_listup_date(current, str(e))
+            except (
+                OSError,
+                TypeError,
+                ValueError,
+                requests.exceptions.RequestException,
+            ) as e:
                 print(f"[ERROR] {current}: {e}")
                 record_failed_listup_date(current, str(e))
 
@@ -363,7 +373,7 @@ def fetch_listup(start_date: date, end_date: date, existing_doc_ids: set[str]) -
 
 
 def _comparable_value(value: object) -> str:
-    return "" if value is None or bool(pd.isna(value)) else str(value)
+    return "" if is_missing_scalar(value) else str(value)
 
 
 def select_changed_listup_rows(
@@ -375,7 +385,7 @@ def select_changed_listup_rows(
     existing_by_id = {
         str(row["docID"]): row
         for row in ensure_listup_columns(existing_df).to_dict("records")
-        if row.get("docID") is not None and not bool(pd.isna(row.get("docID")))
+        if not is_missing_scalar(row.get("docID"))
     }
     compared_columns = [
         column
@@ -385,7 +395,7 @@ def select_changed_listup_rows(
     changed_rows: list[dict[str, object]] = []
     for row in ensure_listup_columns(fetched_df).to_dict("records"):
         doc_id_value = row.get("docID")
-        if doc_id_value is None or bool(pd.isna(doc_id_value)):
+        if is_missing_scalar(doc_id_value):
             continue
         doc_id = str(doc_id_value)
         existing = existing_by_id.get(doc_id)
