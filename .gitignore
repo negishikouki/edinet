@@ -1,5 +1,6 @@
 /doc
 /index
+/state
 /listup.csv
 /S1000001.json
 /S1006MW7_5_.zip
@@ -31,3 +32,5 @@ koumoku_list/項目リスト_事業会社.xlsx
 .code-review-graph/
 /tmp/
 /tests/__pycache__/
+
+state/last_successful_listup_date.txt
