@@ -521,9 +521,18 @@ def prepare_listup(listup: pl.DataFrame) -> pl.DataFrame:
 def select_target_sec_codes(
     merged_listup: pl.DataFrame,
     updated_listup: pl.DataFrame | None,
+    forced_sec_codes: list[str] | tuple[str, ...] = (),
 ) -> list[str]:
+    normalized_forced = list(
+        dict.fromkeys(str(code).strip().upper() for code in forced_sec_codes if str(code).strip())
+    )
     if updated_listup is None:
-        target_rows = merged_listup
+        if normalized_forced:
+            target_rows = merged_listup.filter(
+                pl.col("secCode").is_in(normalized_forced)
+            )
+        else:
+            target_rows = merged_listup
     else:
         updated_edinet_codes = (
             updated_listup.get_column("edinetCode").drop_nulls().unique().to_list()
@@ -540,16 +549,25 @@ def select_target_sec_codes(
         target_rows = merged_listup.filter(
             pl.col("edinetCode").is_in(updated_edinet_codes)
             | pl.col("secCode").is_in(updated_sec_codes)
+            | pl.col("secCode").is_in(normalized_forced)
         )
 
-    return [
+    selected = [
         str(sec_code)
         for sec_code in target_rows.get_column("secCode")
         .drop_nulls()
         .unique(maintain_order=True)
         .to_list()
     ]
-
+    selected_codes = set(selected)
+    available_codes = set(
+        merged_listup.get_column("secCode").drop_nulls().unique().to_list()
+    )
+    for sec_code in normalized_forced:
+        if sec_code in available_codes and sec_code not in selected_codes:
+            selected.append(sec_code)
+            selected_codes.add(sec_code)
+    return selected
 
 def validate_existing_history_is_preserved(
     out_df: pl.DataFrame,
@@ -1322,20 +1340,45 @@ def replace_index_from_staging(staging_root: Path, out_root: Path) -> None:
         shutil.move(str(staged_csv), out_root / staged_csv.name)
 
 
+def build_sec_code_repair_statuses(
+    requested_sec_codes: list[str] | tuple[str, ...],
+    available_sec_codes: set[str],
+    out_root: Path,
+    failed_sec_codes: set[str],
+) -> list[dict[str, str]]:
+    statuses: list[dict[str, str]] = []
+    for sec_code in dict.fromkeys(
+        str(code).strip().upper() for code in requested_sec_codes if str(code).strip()
+    ):
+        if sec_code not in available_sec_codes:
+            status = "no_edinet_history"
+        elif sec_code in failed_sec_codes or not (out_root / f"{sec_code}.csv").is_file():
+            status = "index_rebuild_failed"
+        else:
+            status = "index_available"
+        statuses.append({"secCode": sec_code, "status": status})
+    return statuses
+
 def run_index_rebuild(
     listup_path: Path = LISTUP_CSV,
     updated_listup_path: Path = UPDATED_LISTUP_CSV,
     doc_root: Path = DOC_ROOT,
     out_root: Path = OUT_ROOT,
     max_workers: int | None = None,
-) -> None:
+    forced_sec_codes: list[str] | tuple[str, ...] = (),
+) -> list[dict[str, str]]:
     listup, updated_listup = load_merged_listup(
         listup_path,
         updated_listup_path,
     )
     listup = prepare_listup(listup)
-    target_sec_codes = select_target_sec_codes(listup, updated_listup)
-    incremental = updated_listup is not None
+    available_sec_codes = set(
+        str(code)
+        for code in listup.get_column("secCode").drop_nulls().unique().to_list()
+    )
+    failed_sec_codes: set[str] = set()
+    target_sec_codes = select_target_sec_codes(listup, updated_listup, forced_sec_codes)
+    incremental = updated_listup is not None or bool(forced_sec_codes)
     working_out_root = out_root
     staging_root: Path | None = None
 
@@ -1374,6 +1417,7 @@ def run_index_rebuild(
                 f"{len(result.doc_read_failures)} 件ありました"
             )
             if incremental:
+                failed_sec_codes.add(sec_code)
                 tqdm.write(f"[WARN] {message}")
                 record_failed_index_docs(result.doc_read_failures)
                 record_failed_index_sec_code(sec_code, "doc_read", message)
@@ -1385,6 +1429,7 @@ def run_index_rebuild(
 
     def handle_exception(sec_code: str, exc: BaseException) -> None:
         if incremental:
+            failed_sec_codes.add(sec_code)
             message = f"secCode={sec_code} の処理でエラーが発生しました: {exc}"
             tqdm.write(f"[WARN] {message}")
             record_failed_index_sec_code(sec_code, "sec_code", message)
@@ -1466,13 +1511,18 @@ def run_index_rebuild(
             shutil.rmtree(staging_root, ignore_errors=True)
 
     print("done.")
+    return build_sec_code_repair_statuses(
+        forced_sec_codes, available_sec_codes, out_root, failed_sec_codes
+    )
 
 
 # =========================
 # メイン処理
 # =========================
-def main() -> None:
-    run_index_rebuild()
+def main(
+    forced_sec_codes: list[str] | tuple[str, ...] = (),
+) -> list[dict[str, str]]:
+    return run_index_rebuild(forced_sec_codes=forced_sec_codes)
 
 
 def test_S10078N0():

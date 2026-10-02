@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import polars as pl
+import index as index_module
 
 from index import (_process_sec_code, calc_issued_shares, load_merged_listup,
                    prepare_listup, select_target_sec_codes,
@@ -57,6 +58,50 @@ def temporary_cwd(path: Path):
 
 
 class IncrementalIndexTests(unittest.TestCase):
+    def test_repair_status_distinguishes_available_failed_and_no_history(self) -> None:
+        status_builder = getattr(index_module, "build_sec_code_repair_statuses", None)
+        self.assertTrue(callable(status_builder), "repair status builder must be implemented")
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "10000.csv").write_text("date,secCode\n2024-01-01,10000\n", encoding="utf-8")
+            statuses = status_builder(
+                ["10000", "20000", "30000"],
+                {"10000", "20000"},
+                root,
+                {"20000"},
+            )
+
+        self.assertEqual(
+            statuses,
+            [
+                {"secCode": "10000", "status": "index_available"},
+                {"secCode": "20000", "status": "index_rebuild_failed"},
+                {"secCode": "30000", "status": "no_edinet_history"},
+            ],
+        )
+
+
+    def test_forced_missing_codes_are_added_to_incremental_targets(self) -> None:
+        merged = pl.DataFrame(
+            [
+                {"date": "2024-01-01", "docID": "D1", "edinetCode": "E1", "secCode": "10000", "filerName": "A", "docTypeCode": "120", "submitDateTime": "2024-01-01 09:00:00"},
+                {"date": "2024-01-01", "docID": "D2", "edinetCode": "E2", "secCode": "20000", "filerName": "B", "docTypeCode": "120", "submitDateTime": "2024-01-01 09:00:00"},
+            ]
+        ).select(LISTUP_COLUMNS)
+        updated = pl.DataFrame(
+            [
+                {"date": "2024-02-01", "docID": "D3", "edinetCode": "E1", "secCode": "10000", "filerName": "A", "docTypeCode": "140", "submitDateTime": "2024-02-01 09:00:00"},
+            ]
+        ).select(LISTUP_COLUMNS)
+
+        targets = select_target_sec_codes(
+            prepare_listup(merged),
+            prepare_listup(updated),
+            forced_sec_codes=["20000", "99999"],
+        )
+
+        self.assertEqual(targets, ["10000", "20000"])
+
     def test_calc_issued_shares_uses_current_year_instant(self) -> None:
         doc_df = pl.DataFrame(
             [
