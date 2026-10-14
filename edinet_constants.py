@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 
 API_KEY_ENV_VAR = "EDINET_API_KEY"
-DEFAULT_API_KEY = ""
 
 LISTUP_COLUMNS = [
     "date",
@@ -26,4 +25,9 @@ LISTUP_COLUMNS = [
 
 
 def get_api_key() -> str:
-    return os.environ.get(API_KEY_ENV_VAR, DEFAULT_API_KEY)
+    try:
+        return os.environ[API_KEY_ENV_VAR]
+    except KeyError as exc:
+        raise RuntimeError(
+            f"Set the {API_KEY_ENV_VAR} environment variable before using the EDINET API."
+        ) from exc
