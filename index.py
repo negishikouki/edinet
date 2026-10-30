@@ -39,6 +39,7 @@ LISTUP_SCHEMA = {
     "docInfoEditStatus": pl.Utf8,
     "withdrawalStatus": pl.Utf8,
     "disclosureStatus": pl.Utf8,
+    "legalStatus": pl.Utf8,
     "csvFlag": pl.Utf8,
     "xbrlFlag": pl.Utf8,
     "pdfFlag": pl.Utf8,

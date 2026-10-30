@@ -58,6 +58,18 @@ def temporary_cwd(path: Path):
 
 
 class IncrementalIndexTests(unittest.TestCase):
+    def test_read_listup_csv_preserves_legal_status(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            listup_path = Path(temp_dir) / "listup.csv"
+            listup_path.write_text(
+                "docID,legalStatus\nS100TEST,1\n",
+                encoding="utf-8",
+            )
+
+            listup = index_module.read_listup_csv(listup_path)
+
+        self.assertEqual(listup.get_column("legalStatus").to_list(), ["1"])
+
     def test_repair_status_distinguishes_available_failed_and_no_history(self) -> None:
         status_builder = getattr(index_module, "build_sec_code_repair_statuses", None)
         self.assertTrue(callable(status_builder), "repair status builder must be implemented")

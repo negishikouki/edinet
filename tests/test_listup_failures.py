@@ -111,6 +111,7 @@ class ListupFailureStateTests(unittest.TestCase):
                     "docInfoEditStatus": "1",
                     "withdrawalStatus": "0",
                     "disclosureStatus": "0",
+                    "legalStatus": "1",
                     "csvFlag": "1",
                     "xbrlFlag": "1",
                     "pdfFlag": "1",
@@ -134,6 +135,7 @@ class ListupFailureStateTests(unittest.TestCase):
 
                 self.assertEqual(result["csvFlag"].tolist(), ["1"])
                 self.assertEqual(result["docInfoEditStatus"].tolist(), ["1"])
+                self.assertEqual(result["legalStatus"].tolist(), ["1"])
                 response_dirs = list(
                     (Path("state") / "list_responses" / "2024" / "2024-01-02").glob(
                         "*.manifest.json"
@@ -149,6 +151,7 @@ class ListupFailureStateTests(unittest.TestCase):
                 events_path = response_dirs[0].parent / manifest["eventsCsv"]["path"]
                 events = listup.pd.read_csv(events_path, dtype=str)
                 self.assertEqual(events["opeDateTime"].tolist(), ["2024-01-02 09:05:00"])
+                self.assertEqual(events["legalStatus"].tolist(), ["1"])
 
     def test_no_changes_preserves_pending_updated_listup(self) -> None:
         with TemporaryDirectory() as temp_dir:

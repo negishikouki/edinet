@@ -356,8 +356,9 @@ class FetchCompletionStateTests(unittest.TestCase):
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             (root / "listup.csv").write_text(
-                "date,docID,edinetCode,secCode,filerName,docTypeCode,submitDateTime\n"
-                "2026-08-14,S100TEST,E1,10000,A,120,2026-08-14 09:00:00\n",
+                "date,docID,edinetCode,secCode,filerName,docTypeCode,"
+                "submitDateTime,legalStatus\n"
+                "2026-08-14,S100TEST,E1,10000,A,120,2026-08-14 09:00:00,1\n",
                 encoding="utf-8",
             )
             failed_path = root / "state" / "failed_fetch_docs.csv"
@@ -385,9 +386,10 @@ class FetchCompletionStateTests(unittest.TestCase):
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             (root / "listup.csv").write_text(
-                "date,docID,edinetCode,secCode,filerName,docTypeCode,submitDateTime\n"
-                "2026-08-14,S100DONE,E1,10000,A,120,2026-08-14 09:00:00\n"
-                "2026-08-14,S100STOP,E1,10000,A,120,2026-08-14 09:00:00\n",
+                "date,docID,edinetCode,secCode,filerName,docTypeCode,"
+                "submitDateTime,legalStatus\n"
+                "2026-08-14,S100DONE,E1,10000,A,120,2026-08-14 09:00:00,1\n"
+                "2026-08-14,S100STOP,E1,10000,A,120,2026-08-14 09:00:00,1\n",
                 encoding="utf-8",
             )
             failed_path = root / "state" / "failed_fetch_docs.csv"
@@ -429,6 +431,75 @@ class FetchCompletionStateTests(unittest.TestCase):
                 os.chdir(original_cwd)
 
             mock_fetch.assert_not_called()
+
+
+class LegalStatusFetchTests(unittest.TestCase):
+    def _run_with_listup_row(self, row: str) -> Mock:
+        temp_dir = TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        root = Path(temp_dir.name)
+        header = (
+            "date,docID,edinetCode,secCode,filerName,docTypeCode,submitDateTime,"
+            "disclosureStatus,legalStatus,csvFlag,xbrlFlag\n"
+        )
+        (root / "listup.csv").write_text(header + row + "\n", encoding="utf-8")
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(root)
+            with patch(
+                "fetch.fetch_all_prefix_dfs",
+                return_value=fetched_document_for_test(),
+            ) as mock_fetch:
+                fetch.main()
+        finally:
+            os.chdir(original_cwd)
+        return mock_fetch
+
+    def test_disclosure_status_zero_does_not_block_available_document(self) -> None:
+        mock_fetch = self._run_with_listup_row(
+            "2026-10-30,S100NORMAL,E41918,604A0,Example,120,"
+            "2026-10-30 10:13,0,1,1,1"
+        )
+
+        mock_fetch.assert_called_once_with("S100NORMAL")
+
+    def test_legal_status_zero_blocks_document_even_when_disclosure_status_is_one(self) -> None:
+        mock_fetch = self._run_with_listup_row(
+            "2026-10-30,S100EXPIRED,E1,10000,Example,120,"
+            "2026-10-30 10:13,1,0,1,1"
+        )
+
+        mock_fetch.assert_not_called()
+
+    def test_missing_legal_status_is_recorded_as_unknown(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            header = (
+                "date,docID,edinetCode,secCode,filerName,docTypeCode,submitDateTime,"
+                "disclosureStatus,legalStatus,csvFlag,xbrlFlag\n"
+            )
+            row = (
+                "2026-10-30,S100LEGACY,E1,10000,Example,120,"
+                "2026-10-30 10:13,0,,1,1\n"
+            )
+            (root / "listup.csv").write_text(header + row, encoding="utf-8")
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch("fetch.fetch_all_prefix_dfs") as mock_fetch:
+                    fetch.main()
+            finally:
+                os.chdir(original_cwd)
+
+            mock_fetch.assert_not_called()
+            classifications = fetch.pd.read_csv(
+                root / "state" / "fetch_classifications.csv",
+                dtype=str,
+            )
+            self.assertEqual(
+                classifications.loc[0, "classification"],
+                "legal_status_unknown",
+            )
 
 
 if __name__ == "__main__":

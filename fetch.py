@@ -40,6 +40,7 @@ FETCH_CLASSIFICATIONS_PATH = STATE_ROOT / "fetch_classifications.csv"
 FETCH_CLASSIFICATION_COLUMNS = [
     "docID",
     "disclosureStatus",
+    "legalStatus",
     "csvFlag",
     "xbrlFlag",
     "classification",
@@ -232,9 +233,13 @@ def normalize_disclosure_status(value: object) -> str | None:
     return normalized or None
 
 
+def normalize_legal_status(value: object) -> str | None:
+    return normalize_disclosure_status(value)
+
+
 def is_viewing_period_expired(value: object) -> bool:
-    """EDINET disclosureStatus=0 means the viewing period has expired."""
-    return normalize_disclosure_status(value) == "0"
+    """EDINET legalStatus=0 means the viewing period has expired."""
+    return normalize_legal_status(value) == "0"
 
 
 def classify_document_capability(
@@ -307,6 +312,7 @@ def write_fetch_classifications(
         {
             "docID": doc_id,
             "disclosureStatus": row.get("disclosureStatus"),
+            "legalStatus": row.get("legalStatus"),
             "csvFlag": row.get("csvFlag"),
             "xbrlFlag": row.get("xbrlFlag"),
             "classification": row.get("classification"),
@@ -342,6 +348,7 @@ def record_fetch_classification(
     doc_id: str,
     *,
     disclosure_status: object = None,
+    legal_status: object = None,
     csv_flag: object,
     xbrl_flag: object,
     classification: str,
@@ -350,6 +357,7 @@ def record_fetch_classification(
 ) -> None:
     classifications[doc_id] = {
         "disclosureStatus": normalize_disclosure_status(disclosure_status),
+        "legalStatus": normalize_legal_status(legal_status),
         "csvFlag": normalize_availability_flag(csv_flag),
         "xbrlFlag": normalize_availability_flag(xbrl_flag),
         "classification": classification,
@@ -635,6 +643,7 @@ def main() -> bool:
     listup_df["docID"] = listup_df["docID"].astype(str)
     capabilities: dict[str, tuple[object, object]] = {}
     disclosure_statuses: dict[str, object] = {}
+    legal_statuses: dict[str, object] = {}
     for row in listup_df.to_dict("records"):
         doc_id = row.get("docID")
         if is_missing_scalar(doc_id):
@@ -644,6 +653,7 @@ def main() -> bool:
             row.get("xbrlFlag"),
         )
         disclosure_statuses[str(doc_id)] = row.get("disclosureStatus")
+        legal_statuses[str(doc_id)] = row.get("legalStatus")
     fetched_docids = build_completed_docid_set(out_root, {})
     removed_completed_failures = clear_failed_fetch_docs_for_completed(
         fetched_docids
@@ -666,8 +676,20 @@ def main() -> bool:
     viewing_period_expired_doc_ids = {
         doc_id
         for doc_id in all_doc_ids
-        if is_viewing_period_expired(disclosure_statuses.get(doc_id))
+        if is_viewing_period_expired(legal_statuses.get(doc_id))
     }
+    missing_legal_status_doc_ids = {
+        doc_id
+        for doc_id in all_doc_ids
+        if normalize_legal_status(legal_statuses.get(doc_id)) is None
+    }
+    unknown_legal_status_doc_ids = {
+        doc_id
+        for doc_id in missing_legal_status_doc_ids
+        if doc_id not in fetched_docids
+    }
+    classifications = load_fetch_classifications()
+    classifications_dirty = False
     # A downloaded marker takes precedence over an old failure row. The
     # failure ledger remains an audit trail, but must not trigger a duplicate
     # download when data is already present locally.
@@ -675,6 +697,7 @@ def main() -> bool:
         doc_id
         for doc_id in all_doc_ids
         if doc_id not in viewing_period_expired_doc_ids
+        and doc_id not in unknown_legal_status_doc_ids
         and doc_id not in metadata_unavailable_doc_ids
         and doc_id not in quarantined_failed_doc_ids
         and doc_id not in fetched_docids
@@ -687,19 +710,40 @@ def main() -> bool:
     # KeyboardInterrupt, so resume behavior remains unchanged.
     failure_ledger = load_failed_fetch_docs()
     failure_ledger_dirty = False
-    classifications = load_fetch_classifications()
-    classifications_dirty = False
     for doc_id, prior in list(classifications.items()):
-        current_status = normalize_disclosure_status(
-            disclosure_statuses.get(doc_id)
-        )
-        if (
-            prior.get("classification") == "viewing_period_expired"
-            and current_status is not None
-            and current_status != "0"
-        ):
+        if prior.get("classification") not in {
+            "viewing_period_expired",
+            "legal_status_unknown",
+        }:
+            continue
+        current_status = normalize_legal_status(legal_statuses.get(doc_id))
+        if current_status is not None and current_status != "0":
             del classifications[doc_id]
             classifications_dirty = True
+            continue
+        if (
+            current_status is None
+            and prior.get("classification") == "viewing_period_expired"
+        ):
+            csv_flag, xbrl_flag = capabilities.get(doc_id, (None, None))
+            if normalize_availability_flag(csv_flag) == "0":
+                del classifications[doc_id]
+                classifications_dirty = True
+            else:
+                record_fetch_classification(
+                    doc_id,
+                    disclosure_status=disclosure_statuses.get(doc_id),
+                    legal_status=None,
+                    csv_flag=csv_flag,
+                    xbrl_flag=xbrl_flag,
+                    classification="legal_status_unknown",
+                    error=(
+                        "EDINET list metadata does not include legalStatus; "
+                        "viewing-period expiry cannot be determined"
+                    ),
+                    classifications=classifications,
+                )
+                classifications_dirty = True
     for doc_id in sorted(viewing_period_expired_doc_ids - fetched_docids):
         csv_flag, xbrl_flag = capabilities.get(doc_id, (None, None))
         prior = classifications.get(doc_id)
@@ -707,6 +751,7 @@ def main() -> bool:
             record_fetch_classification(
                 doc_id,
                 disclosure_status=disclosure_statuses.get(doc_id),
+                legal_status=legal_statuses.get(doc_id),
                 csv_flag=csv_flag,
                 xbrl_flag=xbrl_flag,
                 classification="viewing_period_expired",
@@ -717,6 +762,32 @@ def main() -> bool:
         if doc_id in failure_ledger:
             del failure_ledger[doc_id]
             failure_ledger_dirty = True
+    for doc_id in sorted(unknown_legal_status_doc_ids):
+        csv_flag, xbrl_flag = capabilities.get(doc_id, (None, None))
+        prior = classifications.get(doc_id)
+        if normalize_availability_flag(csv_flag) == "0":
+            continue
+        if prior is not None and prior.get("classification") not in {
+            "viewing_period_expired",
+            "legal_status_unknown",
+        }:
+            continue
+        if prior is not None and prior.get("classification") == "legal_status_unknown":
+            continue
+        record_fetch_classification(
+            doc_id,
+            disclosure_status=disclosure_statuses.get(doc_id),
+            legal_status=legal_statuses.get(doc_id),
+            csv_flag=csv_flag,
+            xbrl_flag=xbrl_flag,
+            classification="legal_status_unknown",
+            error=(
+                "EDINET list metadata does not include legalStatus; "
+                "viewing-period expiry cannot be determined"
+            ),
+            classifications=classifications,
+        )
+        classifications_dirty = True
     for doc_id in sorted(
         metadata_unavailable_doc_ids
         - viewing_period_expired_doc_ids
@@ -729,6 +800,7 @@ def main() -> bool:
             record_fetch_classification(
                 doc_id,
                 disclosure_status=disclosure_statuses.get(doc_id),
+                legal_status=legal_statuses.get(doc_id),
                 csv_flag=csv_flag,
                 xbrl_flag=xbrl_flag,
                 classification=capability,
@@ -750,6 +822,7 @@ def main() -> bool:
             record_fetch_classification(
                 doc_id,
                 disclosure_status=disclosure_statuses.get(doc_id),
+                legal_status=legal_statuses.get(doc_id),
                 csv_flag=csv_flag,
                 xbrl_flag=xbrl_flag,
                 classification="unknown_flag_404",
@@ -802,6 +875,7 @@ def main() -> bool:
                     record_fetch_classification(
                         docID,
                         disclosure_status=disclosure_statuses.get(docID),
+                        legal_status=legal_statuses.get(docID),
                         csv_flag=csv_flag,
                         xbrl_flag=xbrl_flag,
                         classification=(

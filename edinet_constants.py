@@ -17,6 +17,7 @@ LISTUP_COLUMNS = [
     "docInfoEditStatus",
     "withdrawalStatus",
     "disclosureStatus",
+    "legalStatus",
     "csvFlag",
     "xbrlFlag",
     "pdfFlag",
